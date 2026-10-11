@@ -24,3 +24,4 @@ ENV PYTHONUNBUFFERED=1
 COPY handler.py /app/handler.py
 
 CMD ["python3", "-u", "/app/handler.py"]
+
