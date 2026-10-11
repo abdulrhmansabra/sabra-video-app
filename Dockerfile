@@ -11,8 +11,11 @@ WORKDIR /app
 
 RUN pip3 install --no-cache-dir runpod torch torchvision torchaudio accelerate transformers diffusers safetensors huggingface_hub
 
-# تحميل نموذج LTX-Video وحرقه داخل الحاوية أثناء البناء السحابي
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-Video', local_dir='/app/models/ltx-video')"
+# استقبال رمز Hugging Face كمتغير بناء
+ARG HF_TOKEN
+
+# تحميل نموذج LTX-Video مع استخدام المفتاح المصرح به
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-Video', local_dir='/app/models/ltx-video', token='${HF_TOKEN}')"
 
 COPY handler.py /app/handler.py
 
