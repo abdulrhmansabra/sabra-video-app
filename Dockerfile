@@ -9,9 +9,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# تثبيت المكتبات اللازمة لـ Diffusers و AnimateDiff مع PyTorch
 RUN pip3 install --no-cache-dir runpod torch torchvision torchaudio accelerate transformers diffusers safetensors huggingface_hub opencv-python
 
+# تحميل وحرق النماذج مباشرة داخل الصورة أثناء البناء على GitHub
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='ByteDance/AnimateDiff-Lightning', subfolder='animatediff_motion_adapter_4step', local_dir='/app/models/animatediff_adapter', max_workers=1)"
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='emilianJR/Realistic_Vision_v5.0_noVAE', local_dir='/app/models/realistic_vision', max_workers=1)"
+
+# نسخ ملف المعالجة
 COPY handler.py /app/handler.py
 
 CMD ["python3", "-u", "/app/handler.py"]
