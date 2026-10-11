@@ -17,7 +17,7 @@ MODEL_DIR = "/tmp/models/realistic_vision"
 os.makedirs(ADAPTER_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# التحميل الفوري للنماذج إذا لم تكن موجودة في مسار المؤقت
+# التحميل الفوري للنماذج (باستخدام allow_patterns لتجنب أخطاء subfolder)
 if not os.listdir(ADAPTER_DIR):
     print("جاري تحميل محرك الحركة...")
     snapshot_download(
@@ -48,6 +48,8 @@ pipeline = AnimateDiffPipeline.from_pretrained(
     torch_dtype=torch.float16
 )
 
+# متغير تتبع حالة الـ IP-Adapter لتجنب إرساله إذا فشل التحميل
+ip_adapter_loaded = False
 try:
     pipeline.load_ip_adapter(
         "h94/IP-Adapter", 
@@ -55,7 +57,8 @@ try:
         weight_name="ip-adapter_sd15.bin"
     )
     pipeline.set_ip_adapter_scale(0.6)
-    print("تم تفعيل دعم الصور بنجاح!")
+    ip_adapter_loaded = True
+    print("تم تفعيل دعم الصور (IP-Adapter) بنجاح!")
 except Exception as e:
     print(f"تحذير أثناء تحميل IP-Adapter: {e}")
 
@@ -99,7 +102,8 @@ def handler(event):
             "num_frames": 16,
         }
         
-        if image_input:
+        # تمرير الصورة فقط إذا تم إرسالها وتم تفعيل الـ IP-Adapter بنجاح مسبقاً
+        if image_input and ip_adapter_loaded:
             pil_img = load_image_from_input(image_input)
             if pil_img:
                 kwargs["ip_adapter_image"] = pil_img
@@ -110,10 +114,15 @@ def handler(event):
         video_path = "/tmp/output.mp4"
         export_to_video(frames, video_path, fps=8)
         
+        # قراءة الفيديو وتحويله إلى Base64 لإعادته مباشرة للعميل
+        with open(video_path, "rb") as video_file:
+            video_bytes = video_file.read()
+            video_base64 = base64.b64encode(video_bytes).decode("utf-8")
+        
         return {
             "status": "success",
             "message": "تم توليد الفيديو بنجاح",
-            "video_path": video_path
+            "video_base64": video_base64
         }
     except Exception as e:
         return {
