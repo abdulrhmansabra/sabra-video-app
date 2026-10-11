@@ -17,7 +17,7 @@ MODEL_DIR = "/tmp/models/realistic_vision"
 os.makedirs(ADAPTER_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# التحميل السريع الفوري إذا لم تكن موجودة
+# التحميل الفوري للنماذج إذا لم تكن موجودة في مسار المؤقت
 if not os.listdir(ADAPTER_DIR):
     print("جاري تحميل محرك الحركة...")
     snapshot_download(
