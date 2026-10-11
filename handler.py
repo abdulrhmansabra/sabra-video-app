@@ -6,14 +6,37 @@ from io import BytesIO
 import base64
 from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
 from diffusers.utils import export_to_video
+from huggingface_hub import snapshot_download
 import runpod
 
-print("جاري تحميل النماذج المحفوظة مسبقاً داخل الحاوية...")
+print("جاري التحقق من النماذج أو تحميلها على سحابة RunPod...")
 
-ADAPTER_DIR = "/app/models/animatediff_adapter"
-MODEL_DIR = "/app/models/realistic_vision"
+ADAPTER_DIR = "/tmp/models/animatediff_adapter"
+MODEL_DIR = "/tmp/models/realistic_vision"
 
-# تحميل المحرك والنموذج من الملفات المحلية داخل الحاوية
+os.makedirs(ADAPTER_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# التحميل السريع الفوري إذا لم تكن موجودة
+if not os.listdir(ADAPTER_DIR):
+    print("جاري تحميل محرك الحركة...")
+    snapshot_download(
+        repo_id="ByteDance/AnimateDiff-Lightning",
+        subfolder="animatediff_motion_adapter_4step",
+        local_dir=ADAPTER_DIR,
+        max_workers=2
+    )
+
+if not os.listdir(MODEL_DIR):
+    print("جاري تحميل النموذج الأساسي...")
+    snapshot_download(
+        repo_id="emilianJR/Realistic_Vision_v5.0_noVAE",
+        local_dir=MODEL_DIR,
+        max_workers=2
+    )
+
+print("جاري تهيئة النماذج في ذاكرة كرت الشاشة...")
+
 adapter = MotionAdapter.from_pretrained(
     ADAPTER_DIR, 
     torch_dtype=torch.float16
@@ -25,7 +48,6 @@ pipeline = AnimateDiffPipeline.from_pretrained(
     torch_dtype=torch.float16
 )
 
-# تفعيل دعم الصور (IP-Adapter)
 try:
     pipeline.load_ip_adapter(
         "h94/IP-Adapter", 
@@ -42,7 +64,7 @@ pipeline.scheduler = EulerDiscreteScheduler.from_config(
     timestep_spacing="trailing"
 )
 pipeline.to("cuda")
-print("النموذج جاهز بالكامل للاستجابة الفورية!")
+print("النموذج جاهز بالكامل للاستجابة!")
 
 def load_image_from_input(img_input):
     if not img_input:
