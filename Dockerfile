@@ -1,23 +1,26 @@
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
-    python3-pip \
-    python3-dev \
-    git \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-# تثبيت PyTorch متوافق مع CUDA 12.1 لضمان دعم الكروت الحديثة بدون أخطاء
-RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip python3-dev git wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# تثبيت باقي مكتبات الذكاء الاصطناعي والتواصل
-RUN pip3 install --no-cache-dir runpod accelerate transformers diffusers safetensors huggingface_hub opencv-python requests
+# PyTorch (Nightly) لدعم كروت Blackwell (sm_120)
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir --pre torch torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/nightly/cu124
 
-# نسخ ملف المعالجة
+# باقي المكتبات
+RUN pip3 install --no-cache-dir \
+    runpod accelerate transformers diffusers safetensors huggingface_hub \
+    opencv-python requests
+
+# (اختياري) فحص سريع عند التشغيل — يطبع نسخة torch وبيانات GPU
+# يمكنك إزالة هذا الجزء إذا لا تريده
+ENV PYTHONUNBUFFERED=1
+
 COPY handler.py /app/handler.py
 
 CMD ["python3", "-u", "/app/handler.py"]
