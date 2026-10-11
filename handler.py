@@ -1,50 +1,60 @@
 import os
 import torch
-import runpod
-from diffusers import LTXVideoPipeline
+from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
 from diffusers.utils import export_to_video
+import runpod
 
-# تحديد جهاز التشغيل (كرت الشاشة GPU)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Loading LTX-Video model on {device}...")
+print("جاري تهيئة نموذج AnimateDiff-Lightning...")
 
-# مسار النموذج المضمن مسبقاً داخل حاوية الـ Docker
-model_path = "/app/models/ltx-video"
-
-# تحميل النموذج مرة واحدة عند إقلاع السيرفر (Cold Start) ليكون جاهزاً فوراً
-pipe = LTXVideoPipeline.from_pretrained(
-    model_path, 
+# تحميل محرك الحركة السريع والنموذج الأساسي
+adapter = MotionAdapter.from_pretrained(
+    "ByteDance/AnimateDiff-Lightning", 
+    subfolder="animatediff_motion_adapter_4step", 
     torch_dtype=torch.float16
-).to(device)
+)
+model_id = "emilianJR/Realistic_Vision_v5.0_noVAE"
+
+pipeline = AnimateDiffPipeline.from_pretrained(
+    model_id, 
+    motion_adapter=adapter, 
+    torch_dtype=torch.float16
+)
+pipeline.scheduler = EulerDiscreteScheduler.from_config(
+    pipeline.scheduler.config, 
+    timestep_spacing="trailing"
+)
+pipeline.to("cuda")
 
 def handler(event):
-    """
-    الدالة الأساسية التي تستقبل الطلبات من RunPod Serverless وتولد الفيديو عبر LTX
-    """
-    job_input = event.get("input", {})
-    prompt = job_input.get("prompt", "Cinematic shot of a futuristic city")
-    
-    print(f"Generating video for prompt: {prompt}")
-    
-    # توليد الإطارات باستخدام نموذج LTX-Video
-    with torch.autocast("cuda"):
-        video_frames = pipe(
+    try:
+        job_input = event.get("input", {})
+        prompt = job_input.get("prompt", "A cinematic stunning shot of a futuristic neon city, high quality")
+        negative_prompt = job_input.get("negative_prompt", "bad quality, blurry, low resolution")
+        
+        print(f"استلام طلب توليد بـ Prompt: {prompt}")
+        
+        # توليد الإطارات
+        output = pipeline(
             prompt=prompt,
-            num_frames=49,       # عدد الإطارات الافتراضي
-            height=512,
-            width=768,
-            num_inference_steps=30,
-        ).frames[0]
-    
-    # حفظ الفيديو الناتج بصيغة mp4 في مسار مؤقت
-    output_path = "/tmp/output.mp4"
-    export_to_video(video_frames, output_path, fps=24)
-    
-    return {
-        "status": "success",
-        "message": f"Video successfully generated for prompt: '{prompt}'",
-        "video_path": output_path
-    }
+            negative_prompt=negative_prompt,
+            num_inference_steps=4,
+            guidance_scale=1.0,
+            num_frames=16,
+        )
+        frames = output.frames[0]
+        
+        video_path = "/tmp/output.mp4"
+        export_to_video(frames, video_path, fps=8)
+        
+        return {
+            "status": "success",
+            "message": "تم توليد الفيديو بنجاح",
+            "video_path": video_path
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
-# تشغيل خادم RunPod Serverless للاستماع للطلبات
 runpod.serverless.start({"handler": handler})
