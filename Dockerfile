@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# تثبيت PyTorch المخصص لكرت الشاشة أولاً وبشكل منفصل ومستقر
-RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# تثبيت PyTorch متوافق مع CUDA 12.1 لضمان دعم الكروت الحديثة بدون أخطاء
+RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # تثبيت باقي مكتبات الذكاء الاصطناعي والتواصل
-RUN pip3 install --no-cache-dir runpod accelerate transformers diffusers safetensors huggingface_hub opencv-python
+RUN pip3 install --no-cache-dir runpod accelerate transformers diffusers safetensors huggingface_hub opencv-python requests
 
 # نسخ ملف المعالجة
 COPY handler.py /app/handler.py
