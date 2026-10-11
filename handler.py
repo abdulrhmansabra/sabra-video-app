@@ -8,10 +8,10 @@ from diffusers.utils import export_to_video
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Loading LTX-Video model on {device}...")
 
-# مسار النموذج المضمن داخل الحاوية
+# مسار النموذج المضمن مسبقاً داخل حاوية الـ Docker
 model_path = "/app/models/ltx-video"
 
-# تحميل نموذج LTX-Video مرة واحدة أثناء إقلاع السيرفر (Cold Start)
+# تحميل النموذج مرة واحدة عند إقلاع السيرفر (Cold Start) ليكون جاهزاً فوراً
 pipe = LTXVideoPipeline.from_pretrained(
     model_path, 
     torch_dtype=torch.float16
@@ -19,14 +19,14 @@ pipe = LTXVideoPipeline.from_pretrained(
 
 def handler(event):
     """
-    الدالة التي تستقبل الطلبات من RunPod وتولد الفيديو عبر نموذج LTX
+    الدالة الأساسية التي تستقبل الطلبات من RunPod Serverless وتولد الفيديو عبر LTX
     """
     job_input = event.get("input", {})
     prompt = job_input.get("prompt", "Cinematic shot of a futuristic city")
     
     print(f"Generating video for prompt: {prompt}")
     
-    # توليد الفيديو باستخدام النموذج
+    # توليد الإطارات باستخدام نموذج LTX-Video
     with torch.autocast("cuda"):
         video_frames = pipe(
             prompt=prompt,
@@ -36,11 +36,9 @@ def handler(event):
             num_inference_steps=30,
         ).frames[0]
     
-    # حفظ الفيديو الناتج مؤقتاً
+    # حفظ الفيديو الناتج بصيغة mp4 في مسار مؤقت
     output_path = "/tmp/output.mp4"
     export_to_video(video_frames, output_path, fps=24)
-    
-    # [ملاحظة: يمكنك لاحقاً رفع ملف الفيديو إلى أي تخزين سحابي مجاني أو إعادته كـ Base64]
     
     return {
         "status": "success",
@@ -48,5 +46,5 @@ def handler(event):
         "video_path": output_path
     }
 
-# تشغيل خادم RunPod Serverless
+# تشغيل خادم RunPod Serverless للاستماع للطلبات
 runpod.serverless.start({"handler": handler})
