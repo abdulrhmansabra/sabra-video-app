@@ -6,49 +6,25 @@ from io import BytesIO
 import base64
 from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
 from diffusers.utils import export_to_video
-from huggingface_hub import snapshot_download
 import runpod
 
-print("جاري التحقق من النماذج أو تحميلها على سحابة RunPod...")
+print("جاري تحميل وتهيئة النماذج بواسطة Diffusers...")
 
-ADAPTER_DIR = "/tmp/models/animatediff_adapter"
-MODEL_DIR = "/tmp/models/realistic_vision"
-
-os.makedirs(ADAPTER_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# التحميل الفوري للنماذج (باستخدام allow_patterns لتجنب أخطاء subfolder)
-if not os.listdir(ADAPTER_DIR):
-    print("جاري تحميل محرك الحركة...")
-    snapshot_download(
-        repo_id="ByteDance/AnimateDiff-Lightning",
-        allow_patterns="animatediff_motion_adapter_4step/*",
-        local_dir=ADAPTER_DIR,
-        max_workers=2
-    )
-
-if not os.listdir(MODEL_DIR):
-    print("جاري تحميل النموذج الأساسي...")
-    snapshot_download(
-        repo_id="emilianJR/Realistic_Vision_v5.0_noVAE",
-        local_dir=MODEL_DIR,
-        max_workers=2
-    )
-
-print("جاري تهيئة النماذج في ذاكرة كرت الشاشة...")
-
+# 1. تحميل محرك الحركة تلقائياً من المستودع الرسمي
 adapter = MotionAdapter.from_pretrained(
-    ADAPTER_DIR, 
+    "ByteDance/AnimateDiff-Lightning", 
+    subfolder="animatediff_motion_adapter_4step", 
     torch_dtype=torch.float16
 )
 
+# 2. تحميل النموذج الأساسي تلقائياً
 pipeline = AnimateDiffPipeline.from_pretrained(
-    MODEL_DIR, 
+    "emilianJR/Realistic_Vision_v5.0_noVAE", 
     motion_adapter=adapter, 
     torch_dtype=torch.float16
 )
 
-# متغير تتبع حالة الـ IP-Adapter لتجنب إرساله إذا فشل التحميل
+# 3. محاولة تفعيل IP-Adapter (دعم الصور) بشكل آمن
 ip_adapter_loaded = False
 try:
     pipeline.load_ip_adapter(
@@ -102,7 +78,6 @@ def handler(event):
             "num_frames": 16,
         }
         
-        # تمرير الصورة فقط إذا تم إرسالها وتم تفعيل الـ IP-Adapter بنجاح مسبقاً
         if image_input and ip_adapter_loaded:
             pil_img = load_image_from_input(image_input)
             if pil_img:
@@ -114,7 +89,6 @@ def handler(event):
         video_path = "/tmp/output.mp4"
         export_to_video(frames, video_path, fps=8)
         
-        # قراءة الفيديو وتحويله إلى Base64 لإعادته مباشرة للعميل
         with open(video_path, "rb") as video_file:
             video_bytes = video_file.read()
             video_base64 = base64.b64encode(video_bytes).decode("utf-8")
