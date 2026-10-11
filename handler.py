@@ -22,7 +22,7 @@ if not os.listdir(ADAPTER_DIR):
     print("جاري تحميل محرك الحركة...")
     snapshot_download(
         repo_id="ByteDance/AnimateDiff-Lightning",
-        subfolder="animatediff_motion_adapter_4step",
+        allow_patterns="animatediff_motion_adapter_4step/*",
         local_dir=ADAPTER_DIR,
         max_workers=2
     )
