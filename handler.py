@@ -24,8 +24,12 @@ def _token_kwargs():
 # قفل تزامني لحماية الحالة العالمية للـ Pipeline من التداخل
 pipeline_lock = threading.Lock()
 
+# IP-Adapter lazy-load state
+ip_adapter_loaded = False
+ip_adapter_lock = threading.Lock()
+
 # -------------------------
-# Model load at startup (متغيرات والتهيئة عند الإقلاع)
+# Model load at startup
 # -------------------------
 try:
     adapter = MotionAdapter.from_pretrained(
@@ -39,7 +43,7 @@ try:
         filename="animatediff_lightning_4step_diffusers.safetensors",
         **_token_kwargs()
     )
-    
+
     state_dict = load_file(weights_path)
     adapter.load_state_dict(state_dict, strict=False)
     print("Loaded Lightning weights successfully.")
@@ -51,21 +55,7 @@ try:
         **_token_kwargs()
     )
 
-    ip_adapter_loaded = False
-    try:
-        pipeline.load_ip_adapter(
-            "h94/IP-Adapter",
-            subfolder="models",
-            weight_name="ip-adapter_sd15.bin",
-            **_token_kwargs()
-        )
-        pipeline.set_ip_adapter_scale(0.6)
-        ip_adapter_loaded = True
-        print("تم تفعيل دعم الصور (IP-Adapter) بنجاح!")
-    except Exception as e:
-        print(f"تحذير أثناء تحميل IP-Adapter (سيتم تعطيله): {e}")
-        ip_adapter_loaded = False
-
+    # لا نحمل IP-Adapter هنا. سيتم تحميله فقط عند وجود صورة (Lazy-load).
     pipeline.scheduler = EulerDiscreteScheduler.from_config(
         pipeline.scheduler.config,
         timestep_spacing="trailing"
@@ -78,8 +68,40 @@ try:
 except Exception as e:
     print(f"فشل تحميل النماذج أثناء الإقلاع: {e}")
     MODEL_READY = False
-    ip_adapter_loaded = False
     pipeline = None
+
+
+def ensure_ip_adapter_loaded():
+    """
+    تحميل IP-Adapter عند الطلب فقط (عند وجود صورة).
+    هذا يمنع مشاكل added_cond_kwargs عندما يكون الطلب نصياً فقط.
+    """
+    global ip_adapter_loaded
+    if ip_adapter_loaded:
+        return
+
+    with ip_adapter_lock:
+        if ip_adapter_loaded:
+            return
+
+        try:
+            pipeline.load_ip_adapter(
+                "h94/IP-Adapter",
+                subfolder="models",
+                weight_name="ip-adapter_sd15.bin",
+                **_token_kwargs()
+            )
+            try:
+                pipeline.set_ip_adapter_scale(0.6)
+            except Exception:
+                pass
+
+            ip_adapter_loaded = True
+            print("تم تحميل IP-Adapter عند الطلب (Lazy-load) بنجاح.")
+        except Exception as e:
+            # نخليها False ونرمي الخطأ للـ handler يتعامل معه برسالة واضحة
+            ip_adapter_loaded = False
+            raise RuntimeError(f"فشل تحميل IP-Adapter: {e}") from e
 
 
 # -------------------------
@@ -102,6 +124,7 @@ def load_image_from_input(img_input: str):
             response.raise_for_status()
             return Image.open(BytesIO(response.content)).convert("RGB")
         else:
+            # base64 (قد يكون data URL)
             if "," in img_input:
                 img_input = img_input.split(",", 1)[1]
             data = base64.b64decode(img_input)
@@ -142,33 +165,36 @@ def handler(event):
         num_frames = int(job_input.get("num_frames", 16))
         fps = int(job_input.get("fps", 8))
 
-        kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "num_frames": num_frames,
-        }
-
-        # التحكم الديناميكي بـ IP-Adapter لمنع أي تعارض في النصوص الخالصة
         with pipeline_lock:
             if has_image:
-                if not ip_adapter_loaded:
-                    return {"status": "error", "message": "تم إرسال image لكن IP-Adapter غير محمّل."}
-                kwargs["ip_adapter_image"] = pil_img
-                if ip_adapter_loaded:
-                    try:
-                        pipeline.set_ip_adapter_scale(0.6)
-                    except:
-                        pass
-            else:
-                if ip_adapter_loaded:
-                    try:
-                        pipeline.set_ip_adapter_scale(0.0)
-                    except:
-                        pass
+                # حمّل IP-Adapter فقط عند وجود صورة
+                ensure_ip_adapter_loaded()
 
-            output = pipeline(**kwargs)
+                # فعّل تأثيره (لو الدالة متاحة)
+                try:
+                    pipeline.set_ip_adapter_scale(0.6)
+                except Exception:
+                    pass
+
+                # ملاحظة: إذا ظهرت رسالة "unexpected keyword ip_adapter_image"
+                # فهذا يعني أن نسخة diffusers تتوقع اسم وسيط مختلف.
+                output = pipeline(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    num_frames=num_frames,
+                    ip_adapter_image=pil_img,
+                )
+            else:
+                # نص فقط: لا تمرر أي مفاتيح تخص IP-Adapter إطلاقاً
+                output = pipeline(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    num_frames=num_frames,
+                )
 
         torch.cuda.empty_cache()
 
@@ -181,6 +207,7 @@ def handler(event):
         if frames is None:
             return {"status": "error", "message": "فشل التوليد: لا توجد frames في مخرجات الـ pipeline."}
 
+        # frames غالبًا تكون [batch][frame]
         video_frames = frames[0] if isinstance(frames, list) and len(frames) > 0 else frames
         if not video_frames:
             return {"status": "error", "message": "قائمة الإطارات فارغة."}
