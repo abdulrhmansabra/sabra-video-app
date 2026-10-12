@@ -25,37 +25,34 @@ pipeline_lock = threading.Lock()
 # Model load at startup
 # -------------------------
 try:
-    # استخدام نسخة Wan2.1-T2V-1.3B المناسبة للـ Serverless (خفيفة وسريعة الإقلاع)
+    # استخدام نسخة Wan2.1 الخفيفة والمناسبة للـ Serverless
     MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B"
 
     pipeline = WanPipeline.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,  # Wan2.1 يعمل بأفضل أداء مع bfloat16
+        torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
     
-    # نقل النموذج للـ GPU وتفعيل تحسين الذاكرة
     pipeline.to("cuda")
-    
-    # إذا كنت ترغب بتوفير الذاكرة أكثر (اختياري):
-    # pipeline.enable_model_cpu_offload()
 
     print("نموذج Wan2.1 جاهز بالكامل للاستجابة!")
     MODEL_READY = True
 
 except Exception as e:
-    print(f"فشل تحميل نموذج Wan2.1 أثناء الإقلاع: {e}")
+    print(f"فشل تحميل النماذج أثناء الإقلاع: {e}")
     MODEL_READY = False
     pipeline = None
 
 
 # -------------------------
-# Helpers
+# Helpers (نفس بنية كودك الأصلي تماماً)
 # -------------------------
 def load_image_from_input(img_input: str):
     if img_input is None:
         return None
     if not isinstance(img_input, str):
+        print(f"image must be a string. got: {type(img_input)}")
         return None
 
     img_input = img_input.strip()
@@ -68,6 +65,7 @@ def load_image_from_input(img_input: str):
             response.raise_for_status()
             return Image.open(BytesIO(response.content)).convert("RGB")
         else:
+            # base64 (قد يكون data URL)
             if "," in img_input:
                 img_input = img_input.split(",", 1)[1]
             data = base64.b64decode(img_input)
@@ -78,31 +76,41 @@ def load_image_from_input(img_input: str):
 
 
 # -------------------------
-# RunPod Handler
+# RunPod Handler (محافظ على نفس المدخلات والمخرجات)
 # -------------------------
 def handler(event):
     if not MODEL_READY or pipeline is None:
-        return {"status": "error", "message": "النموذج لم يُحمّل بنجاح عند الإقلاع. راجع Logs."}
+        return {"status": "error", "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs."}
 
     try:
         job_input = event.get("input") or {}
 
         prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "bright, overexposed, static, blurry")
+        negative_prompt = job_input.get("negative_prompt")
+
+        image_input = job_input.get("image")
+        pil_img = load_image_from_input(image_input)
+        has_image = pil_img is not None
 
         if prompt is None or (isinstance(prompt, str) and prompt.strip() == ""):
-            return {"status": "error", "message": "لازم ترسل prompt على الأقل."}
+            if has_image:
+                prompt = "high quality, cinematic"
+            else:
+                return {"status": "error", "message": "لازم ترسل prompt أو image على الأقل."}
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 30)) # Wan2.1 يحتاج خطوات أكثر جودة (عادة 30-50)
-        guidance_scale = float(job_input.get("guidance_scale", 5.0))         # Wan يفضل مقياس توجيه أعلى قليلاً (مثل 5.0)
-        num_frames = int(job_input.get("num_frames", 81))                    # Wan2.1 مصمم لـ 81 إطاراً افتراضياً للفيديو القياسي
+        if negative_prompt is None:
+            negative_prompt = "bright, overexposed, static, blurry"
+
+        num_inference_steps = int(job_input.get("num_inference_steps", 30))
+        guidance_scale = float(job_input.get("guidance_scale", 5.0))
+        num_frames = int(job_input.get("num_frames", 81))
         fps = int(job_input.get("fps", 16))
         
-        # أبعاد الفيديو (Wan2.1 يدعم حتى 720p، لكن 480p أو 512x512 أسرع للـ Serverless)
         width = int(job_input.get("width", 832))
         height = int(job_input.get("height", 480))
 
         with pipeline_lock:
+            # تنفيذ الاستدعاء للنموذج الجديد مع الحفاظ على القفل التزامني
             output = pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -118,13 +126,17 @@ def handler(event):
         if output is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
 
+        video_frames = output[0] if isinstance(output, list) and len(output) > 0 else output
+        if not video_frames:
+            return {"status": "error", "message": "قائمة الإطارات فارغة."}
+
         video_path = "/tmp/output.mp4"
-        export_to_video(output[0], video_path, fps=fps)
+        export_to_video(video_frames, video_path, fps=fps)
 
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        return {"status": "success", "message": "تم توليد الفيديو بنجاح بواسطة Wan2.1", "video_base64": video_base64}
+        return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
         traceback.print_exc()
