@@ -14,7 +14,7 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخ من diffusers وبقية المكتبات اللازمة لـ Wan2.1 مع إضافة imageio
+# تثبيت أحدث نسخ من diffusers وبقية المكتبات اللازمة لـ Wan2.1 مع إضافة imageio و OpenCV
 RUN pip3 install --no-cache-dir \
     runpod accelerate transformers "diffusers>=0.33.0" safetensors huggingface_hub \
     opencv-python requests sentencepiece protobuf imageio imageio-ffmpeg
