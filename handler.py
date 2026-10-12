@@ -49,7 +49,7 @@ except Exception as e:
 
 
 # -------------------------
-# Frame Normalization Helpers (المصححة لضبط الألوان وعكس القنوات)
+# Frame Normalization Helpers (المصححة نهائياً للألوان الطبيعية)
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -79,17 +79,11 @@ def normalize_frame(frame):
     if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
         frame = np.transpose(frame, (1, 2, 0))
 
-    # ضبط النطاق اللوني
-    if np.issubdtype(frame.dtype, np.floating) or frame.min() < 0 or frame.max() <= 1.0:
-        if frame.min() < 0:
-            frame = (frame + 1.0) / 2.0
+    # ضبط النطاق اللوني الحقيقي للموديل [0, 1] وتحويله إلى uint8 بدون عكس قنوات
+    if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
         frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
     else:
         frame = frame.clip(0, 255).astype(np.uint8)
-
-    # تصحيح قنوات الألوان (عكس القنوات لتظهر الألوان طبيعية تماماً)
-    if frame.ndim == 3 and frame.shape[-1] == 3:
-        frame = frame[..., ::-1]
 
     return frame
 
