@@ -49,7 +49,7 @@ except Exception as e:
 
 
 # -------------------------
-# Frame Normalization Helpers (بدون عكس قنوات، الاعتماد على RGB القياسي وتصدير OpenCV)
+# Frame Normalization Helpers
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -114,9 +114,9 @@ def export_video_with_opencv(frames, output_path, fps=16):
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
     for frame in frames:
-        # OpenCV يتوقع BGR، لذا نقوم بتحويل الإطار من RGB (الخاص بالموديل) إلى BGR للتصدير السليم
-        bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        out.write(bgr_frame)
+        # عكس القنوات لتصحيح الألوان نهائياً وتجنب مشكلة الكاميرا الحرارية
+        corrected_frame = frame[..., ::-1]
+        out.write(corrected_frame)
         
     out.release()
 
@@ -219,7 +219,7 @@ def handler(event):
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
         print("تم توليد وتصدير الفيديو بنجاح عبر OpenCV!")
-        return {"status": "success", "message": "99تم توليد الفيديو بنجاح", "video_base64": video_base64}
+        return {"status": "success", "message": "تم توليد الفيديو0 بنجاح", "video_base64": video_base64}
 
     except Exception as e:
         print("="*50)
