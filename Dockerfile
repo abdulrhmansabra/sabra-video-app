@@ -3,8 +3,10 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
+# تثبيت الحزم الأساسية ومكتبات النظام الناقصة لـ OpenCV (مثل libxcb1)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget ca-certificates \
+    libxcb1 libx11-xcb1 libgl1-mesa-glx libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # تثبيت PyTorch المستقر (Stable) مع دعم CUDA 12.4
