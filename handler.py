@@ -7,9 +7,9 @@ from io import BytesIO
 import base64
 import traceback
 import threading
+import cv2
 
 from diffusers import WanPipeline
-from diffusers.utils import export_to_video
 import runpod
 
 print("جاري تحميل وتهيئة نموذج Wan2.1...")
@@ -49,7 +49,7 @@ except Exception as e:
 
 
 # -------------------------
-# Frame Normalization Helpers (المصححة نهائياً مع عكس القنوات لتصحيح الألوان)
+# Frame Normalization Helpers (بدون عكس قنوات، الاعتماد على RGB القياسي وتصدير OpenCV)
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -85,10 +85,6 @@ def normalize_frame(frame):
     else:
         frame = frame.clip(0, 255).astype(np.uint8)
 
-    # عكس القنوات لتصحيح الألوان الحرارية وإعادتها لطبيعتها
-    if frame.ndim == 3 and frame.shape[-1] == 3:
-        frame = frame[..., ::-1]
-
     return frame
 
 def normalize_video_frames(video_frames):
@@ -107,6 +103,22 @@ def normalize_video_frames(video_frames):
         except Exception as e:
             print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
     return out
+
+def export_video_with_opencv(frames, output_path, fps=16):
+    if not frames:
+        raise ValueError("قائمة الإطارات فارغة، لا يمكن التصدير.")
+    
+    height, width, _ = frames[0].shape
+    # استخدام ترميز mp4v لضمان توافق الفيديو وعرضه بسلاسة داخل المتصفح و RunPod
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    for frame in frames:
+        # OpenCV يتوقع BGR، لذا نقوم بتحويل الإطار من RGB (الخاص بالموديل) إلى BGR للتصدير السليم
+        bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        out.write(bgr_frame)
+        
+    out.release()
 
 
 # -------------------------
@@ -198,7 +210,7 @@ def handler(event):
             return {"status": "error", "message": "قائمة الإطارات فارغة بعد التطبيع."}
 
         video_path = "/tmp/output.mp4"
-        export_to_video(video_frames, video_path, fps=fps)
+        export_video_with_opencv(video_frames, video_path, fps=fps)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
             return {"status": "error", "message": "فشل تصدير الفيديو: الملف الناتج فارغ أو غير موجود."}
@@ -206,8 +218,8 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح88!")
-        return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
+        print("تم توليد وتصدير الفيديو بنجاح عبر OpenCV!")
+        return {"status": "success", "message": "99تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
         print("="*50)
