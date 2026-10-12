@@ -5,6 +5,9 @@ import requests
 from io import BytesIO
 import base64
 
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
+
 from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
 from diffusers.utils import export_to_video
 import runpod
@@ -15,22 +18,30 @@ print("جاري تحميل وتهيئة النماذج بواسطة Diffusers...
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
-    """
-    تجهيز معاملات المصادقة بناءً على المتوفر
-    """
     if not HF_TOKEN:
         return {}
-    return {"token": HF_TOKEN, "use_auth_token": HF_TOKEN}
+    return {"token": HF_TOKEN}
 
 try:
-    # التصحيح هنا: استخدام weight_name لتحميل ملف الأوزان الصحيح من الجذر مباشرة
+    # 1. تحميل الـ MotionAdapter الأساسي (الذي يحتوي على config.json الهيكلي الصحيح)
     adapter = MotionAdapter.from_pretrained(
-        "ByteDance/AnimateDiff-Lightning",
-        weight_name="animatediff_lightning_4step_diffusers.safetensors",
+        "guoyww/animatediff-motion-adapter-v1-5-3",
         torch_dtype=torch.float16,
         **_token_kwargs()
     )
 
+    # 2. تحميل أوزان AnimateDiff-Lightning (4-step) ودمجها بأمان باستخدام strict=False
+    weights_path = hf_hub_download(
+        repo_id="ByteDance/AnimateDiff-Lightning",
+        filename="animatediff_lightning_4step_diffusers.safetensors",
+        **_token_kwargs()
+    )
+    
+    state_dict = load_file(weights_path)
+    missing, unexpected = adapter.load_state_dict(state_dict, strict=False)
+    print(f"Loaded Lightning weights. Missing={len(missing)} Unexpected={len(unexpected)}")
+
+    # 3. إعداد الـ Pipeline الأساسي
     pipeline = AnimateDiffPipeline.from_pretrained(
         "emilianJR/Realistic_Vision_v5.0_noVAE",
         motion_adapter=adapter,
