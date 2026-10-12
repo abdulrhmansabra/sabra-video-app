@@ -122,16 +122,26 @@ def handler(event):
                 kwargs["ip_adapter_image"] = pil_img
 
         output = pipeline(**kwargs)
-        
-        # استخراج الإطارات بأمان تام مع التحقق من عدم وجود قيم فارغة
-        frames = getattr(output, "frames", None)
-        if frames is None and isinstance(output, (tuple, list)):
-            frames = output[0]
-            
-        if not frames:
-            return {"status": "error", "message": "فشل التوليد: النموذج لم يُرجع أي إطارات."}
+        print(f"Pipeline output object: {output}")
 
-        video_frames = frames[0] if isinstance(frames, list) and len(frames) > 0 else frames
+        # استخراج الإطارات بأمان تام مع دعم مختلف هياكل الإخراج
+        frames = None
+        if hasattr(output, "frames"):
+            frames = output.frames
+        elif isinstance(output, (tuple, list)) and len(output) > 0:
+            frames = output[0]
+
+        if frames is None:
+            return {"status": "error", "message": "فشل التوليد: output.frames قيمتها None."}
+
+        # إذا كانت الإطارات عبارة عن دفعة (Batch) نأخذ العنصر الأول
+        if isinstance(frames, list) and len(frames) > 0:
+            video_frames = frames[0]
+        else:
+            video_frames = frames
+
+        if not video_frames:
+            return {"status": "error", "message": "قائمة الإطارات فارغة."}
 
         video_path = "/tmp/output.mp4"
         export_to_video(video_frames, video_path, fps=8)
@@ -147,6 +157,8 @@ def handler(event):
         }
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 
