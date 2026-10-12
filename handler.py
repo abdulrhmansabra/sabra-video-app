@@ -14,7 +14,6 @@ import runpod
 
 print("جاري تحميل وتهيئة النماذج بواسطة Diffusers...")
 
-# اقرأ توكن Hugging Face من البيئة
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
@@ -23,14 +22,12 @@ def _token_kwargs():
     return {"token": HF_TOKEN}
 
 try:
-    # 1. تحميل الـ MotionAdapter الأساسي (الذي يحتوي على config.json الهيكلي الصحيح)
     adapter = MotionAdapter.from_pretrained(
         "guoyww/animatediff-motion-adapter-v1-5-3",
         torch_dtype=torch.float16,
         **_token_kwargs()
     )
 
-    # 2. تحميل أوزان AnimateDiff-Lightning (4-step) ودمجها بأمان باستخدام strict=False
     weights_path = hf_hub_download(
         repo_id="ByteDance/AnimateDiff-Lightning",
         filename="animatediff_lightning_4step_diffusers.safetensors",
@@ -38,10 +35,9 @@ try:
     )
     
     state_dict = load_file(weights_path)
-    missing, unexpected = adapter.load_state_dict(state_dict, strict=False)
-    print(f"Loaded Lightning weights. Missing={len(missing)} Unexpected={len(unexpected)}")
+    adapter.load_state_dict(state_dict, strict=False)
+    print("Loaded Lightning weights successfully.")
 
-    # 3. إعداد الـ Pipeline الأساسي بالمستودع الصحيح
     pipeline = AnimateDiffPipeline.from_pretrained(
         "SG161222/Realistic_Vision_V5.0_noVAE",
         motion_adapter=adapter,
@@ -126,10 +122,19 @@ def handler(event):
                 kwargs["ip_adapter_image"] = pil_img
 
         output = pipeline(**kwargs)
-        frames = output.frames[0]
+        
+        # استخراج الإطارات بأمان تام مع التحقق من عدم وجود قيم فارغة
+        frames = getattr(output, "frames", None)
+        if frames is None and isinstance(output, (tuple, list)):
+            frames = output[0]
+            
+        if not frames:
+            return {"status": "error", "message": "فشل التوليد: النموذج لم يُرجع أي إطارات."}
+
+        video_frames = frames[0] if isinstance(frames, list) and len(frames) > 0 else frames
 
         video_path = "/tmp/output.mp4"
-        export_to_video(frames, video_path, fps=8)
+        export_to_video(video_frames, video_path, fps=8)
 
         with open(video_path, "rb") as video_file:
             video_bytes = video_file.read()
