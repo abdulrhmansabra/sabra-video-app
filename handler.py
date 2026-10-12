@@ -1,5 +1,6 @@
 import os
 import torch
+import numpy as np
 from PIL import Image
 import requests
 from io import BytesIO
@@ -46,7 +47,56 @@ except Exception as e:
 
 
 # -------------------------
-# Helpers (نفس بنية كودك الأصلي تماماً)
+# Frame Normalization Helpers (لحل مشكلة الأبعاد نهائياً)
+# -------------------------
+def to_numpy(x):
+    if hasattr(x, "detach"):
+        x = x.detach()
+    if hasattr(x, "cpu"):
+        x = x.cpu()
+    if hasattr(x, "numpy"):
+        x = x.numpy()
+    return x
+
+def normalize_frame(frame):
+    frame = to_numpy(frame)
+    frame = np.asarray(frame)
+
+    frame = np.squeeze(frame)
+
+    if frame.ndim == 2:
+        frame = frame[..., None]
+
+    while frame.ndim > 3:
+        frame = frame[0]
+
+    if frame.ndim == 2:
+        frame = frame[..., None]
+
+    # معالجة channels-first لو كانت (C, H, W)
+    if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
+        frame = np.transpose(frame, (1, 2, 0))
+
+    if frame.dtype != np.uint8:
+        if frame.max() <= 1.0:
+            frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
+        else:
+            frame = frame.clip(0, 255).astype(np.uint8)
+
+    return frame
+
+def normalize_video_frames(video_frames):
+    if not isinstance(video_frames, (list, tuple)):
+        video_frames = list(video_frames)
+
+    out = []
+    for fr in video_frames:
+        out.append(normalize_frame(fr))
+    return out
+
+
+# -------------------------
+# Helpers
 # -------------------------
 def load_image_from_input(img_input: str):
     if img_input is None:
@@ -76,7 +126,7 @@ def load_image_from_input(img_input: str):
 
 
 # -------------------------
-# RunPod Handler (محافظ على نفس المدخلات والمخرجات)
+# RunPod Handler
 # -------------------------
 def handler(event):
     if not MODEL_READY or pipeline is None:
@@ -126,8 +176,12 @@ def handler(event):
         if output is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
 
-        video_frames = output[0] if isinstance(output, (list, tuple)) and len(output) > 0 else output
-        if video_frames is None or (hasattr(video_frames, "__len__") and len(video_frames) == 0):
+        raw_frames = output[0] if isinstance(output, (list, tuple)) and len(output) > 0 else output
+        
+        # تطبيع وتوحيد أبعاد الإطارات لحل مشكلة الـ unpacking نهائياً
+        video_frames = normalize_video_frames(raw_frames)
+
+        if video_frames is None or len(video_frames) == 0:
             return {"status": "error", "message": "قائمة الإطارات فارغة."}
 
         video_path = "/tmp/output.mp4"
