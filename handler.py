@@ -9,10 +9,10 @@ import traceback
 import threading
 import cv2
 
-from diffusers import WanPipeline
+from diffusers import AutoencoderKLWan, WanPipeline
 import runpod
 
-print("جاري تحميل وتهيئة نموذج Wan2.1...")
+print("جاري تحميل وتهيئة نموذج Wan2.1 مع VAE المعدل...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -28,15 +28,25 @@ pipeline_lock = threading.Lock()
 try:
     MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 
+    # تحميل الـ VAE بدقة float32 لمنع تشويه الألوان والبهتان
+    vae = AutoencoderKLWan.from_pretrained(
+        MODEL_ID, 
+        subfolder="vae", 
+        torch_dtype=torch.float32,
+        **_token_kwargs()
+    )
+
+    # تحميل البايبلاين مع ربط الـ VAE المعدل
     pipeline = WanPipeline.from_pretrained(
         MODEL_ID,
+        vae=vae,
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
     
     pipeline.to("cuda")
 
-    print("نموذج Wan2.1 جاهز بالكامل للاستجابة!")
+    print("نموذج Wan2.1 جاهز بالكامل للاستجابة بأفضل جودة ألوان!")
     MODEL_READY = True
 
 except Exception as e:
@@ -104,7 +114,7 @@ def normalize_video_frames(video_frames):
             print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
     return out
 
-def export_video_with_opencv(frames, output_path, fps=16):
+def export_video_with_opencv(frames, output_path, fps=15):
     if not frames:
         raise ValueError("قائمة الإطارات فارغة، لا يمكن التصدير.")
     
@@ -174,20 +184,27 @@ def handler(event):
                 return {"status": "error", "message": "لازم ترسل prompt أو image على الأقل."}
 
         if negative_prompt is None:
-            negative_prompt = "bright, overexposed, static, blurry"
+            negative_prompt = (
+                "Bright tones, overexposed, static, blurred details, subtitles, style, works, "
+                "paintings, images, static, overall gray, worst quality, low quality, JPEG compression "
+                "residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, "
+                "disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, "
+                "many people in the background, walking backwards"
+            )
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 20))
+        num_inference_steps = int(job_input.get("num_inference_steps", 30))  # رفع الخطوات لضمان دقة الاستيعاب
         guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        num_frames = int(job_input.get("num_frames", 33))
-        fps = int(job_input.get("fps", 16))
+        num_frames = int(job_input.get("num_frames", 81))  # مطابق للاختبار الناجح
+        fps = int(job_input.get("fps", 15))
         
-        width = int(job_input.get("width", 512))
-        height = int(job_input.get("height", 384))
+        width = int(job_input.get("width", 832))   # مقاسات الكود الناجح
+        height = int(job_input.get("height", 480))
 
         print(f"🚀 بدء معالجة الطلب: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
 
         with pipeline_lock:
-            output = pipeline(
+            # استخراج الإطارات المطلوبة مباشرة
+            output_result = pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 num_inference_steps=num_inference_steps,
@@ -199,8 +216,14 @@ def handler(event):
 
         torch.cuda.empty_cache()
 
-        if output is None:
+        if output_result is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
+
+        # التعامل مع شكل مخرجات الـ pipeline سواء كانت tuple أو قائمة مباشرة
+        if isinstance(output_result, (list, tuple)):
+            output = output_result[0]
+        else:
+            output = output_result
 
         print(f"🔍 تشخيص الإطارات الخام -> type: {type(output)}, shape/len: {getattr(output, 'shape', len(output) if hasattr(output, '__len__') else 'unknown')}")
 
@@ -218,8 +241,8 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح عبر OpenCV!")
-        return {"status": "success", "message": "تم توليد الفيديو0 بنجاح", "video_base64": video_base64}
+        print("تم توليد وتصدير الفيديو بنجاح بمعايير الألوان الدقيقة والدقة العالية!")
+        return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
         print("="*50)
