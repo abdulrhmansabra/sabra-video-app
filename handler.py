@@ -49,7 +49,7 @@ except Exception as e:
 
 
 # -------------------------
-# Frame Normalization Helpers (المصححة نهائياً للألوان الطبيعية)
+# Frame Normalization Helpers (المصححة نهائياً مع عكس القنوات لتصحيح الألوان)
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -79,11 +79,15 @@ def normalize_frame(frame):
     if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
         frame = np.transpose(frame, (1, 2, 0))
 
-    # ضبط النطاق اللوني الحقيقي للموديل [0, 1] وتحويله إلى uint8 بدون عكس قنوات
+    # ضبط النطاق اللوني الحقيقي للموديل [0, 1] وتحويله إلى uint8
     if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
         frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
     else:
         frame = frame.clip(0, 255).astype(np.uint8)
+
+    # عكس القنوات لتصحيح الألوان الحرارية وإعادتها لطبيعتها
+    if frame.ndim == 3 and frame.shape[-1] == 3:
+        frame = frame[..., ::-1]
 
     return frame
 
@@ -202,7 +206,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح!")
+        print("تم توليد وتصدير الفيديو بنجاح88!")
         return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
