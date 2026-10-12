@@ -150,15 +150,24 @@ def handler(event):
             "num_frames": num_frames,
         }
 
-        if has_image:
-            if not ip_adapter_loaded:
-                return {"status": "error", "message": "تم إرسال image لكن IP-Adapter غير محمّل."}
-            kwargs["ip_adapter_image"] = pil_img
-        else:
-            # حل جذري لمنع خطأ TypeError عندما يكون الطلب نصياً فقط
-            kwargs["added_cond_kwargs"] = {}
-
+        # التحكم الديناميكي بـ IP-Adapter لمنع أي تعارض في النصوص الخالصة
         with pipeline_lock:
+            if has_image:
+                if not ip_adapter_loaded:
+                    return {"status": "error", "message": "تم إرسال image لكن IP-Adapter غير محمّل."}
+                kwargs["ip_adapter_image"] = pil_img
+                if ip_adapter_loaded:
+                    try:
+                        pipeline.set_ip_adapter_scale(0.6)
+                    except:
+                        pass
+            else:
+                if ip_adapter_loaded:
+                    try:
+                        pipeline.set_ip_adapter_scale(0.0)
+                    except:
+                        pass
+
             output = pipeline(**kwargs)
 
         torch.cuda.empty_cache()
