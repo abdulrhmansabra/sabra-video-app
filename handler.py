@@ -154,6 +154,9 @@ def handler(event):
             if not ip_adapter_loaded:
                 return {"status": "error", "message": "تم إرسال image لكن IP-Adapter غير محمّل."}
             kwargs["ip_adapter_image"] = pil_img
+        else:
+            # حل جذري لمنع خطأ TypeError عندما يكون الطلب نصياً فقط
+            kwargs["added_cond_kwargs"] = {}
 
         with pipeline_lock:
             output = pipeline(**kwargs)
