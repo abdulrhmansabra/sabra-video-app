@@ -26,7 +26,6 @@ pipeline_lock = threading.Lock()
 # Model load at startup
 # -------------------------
 try:
-    # استخدام المسار الرسمي الصحيح والموثوق لموديل Wan2.1 في Diffusers
     MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 
     pipeline = WanPipeline.from_pretrained(
@@ -41,13 +40,16 @@ try:
     MODEL_READY = True
 
 except Exception as e:
-    print(f"فشل تحميل النماذج أثناء الإقلاع: {e}")
+    print("="*50)
+    print("❌ فشل تحميل النماذج أثناء الإقلاع:")
+    traceback.print_exc()
+    print("="*50)
     MODEL_READY = False
     pipeline = None
 
 
 # -------------------------
-# Frame Normalization Helpers (لحل مشكلة الأبعاد نهائياً)
+# Frame Normalization Helpers
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -73,15 +75,17 @@ def normalize_frame(frame):
     if frame.ndim == 2:
         frame = frame[..., None]
 
-    # معالجة channels-first لو كانت (C, H, W)
+    # معالجة channels-first لو كانت (C, H, W) -> (H, W, C)
     if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
         frame = np.transpose(frame, (1, 2, 0))
 
-    if frame.dtype != np.uint8:
-        if frame.max() <= 1.0:
-            frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
-        else:
-            frame = frame.clip(0, 255).astype(np.uint8)
+    # تصحيح النطاق اللوني لمنع الألوان المعكوسة أو الحرارية
+    if np.issubdtype(frame.dtype, np.floating) or frame.min() < 0 or frame.max() <= 1.0:
+        if frame.min() < 0:
+            frame = (frame + 1.0) / 2.0
+        frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
+    else:
+        frame = frame.clip(0, 255).astype(np.uint8)
 
     return frame
 
@@ -90,8 +94,11 @@ def normalize_video_frames(video_frames):
         video_frames = list(video_frames)
 
     out = []
-    for fr in video_frames:
-        out.append(normalize_frame(fr))
+    for idx, fr in enumerate(video_frames):
+        try:
+            out.append(normalize_frame(fr))
+        except Exception as e:
+            print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {idx}: {e}")
     return out
 
 
@@ -115,7 +122,6 @@ def load_image_from_input(img_input: str):
             response.raise_for_status()
             return Image.open(BytesIO(response.content)).convert("RGB")
         else:
-            # base64 (قد يكون data URL)
             if "," in img_input:
                 img_input = img_input.split(",", 1)[1]
             data = base64.b64decode(img_input)
@@ -130,7 +136,7 @@ def load_image_from_input(img_input: str):
 # -------------------------
 def handler(event):
     if not MODEL_READY or pipeline is None:
-        return {"status": "error", "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs."}
+        return {"status": "error", "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs للتفاصيل."}
 
     try:
         job_input = event.get("input") or {}
@@ -151,16 +157,17 @@ def handler(event):
         if negative_prompt is None:
             negative_prompt = "bright, overexposed, static, blurry"
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 30))
+        num_inference_steps = int(job_input.get("num_inference_steps", 20))
         guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        num_frames = int(job_input.get("num_frames", 81))
+        num_frames = int(job_input.get("num_frames", 33))
         fps = int(job_input.get("fps", 16))
         
-        width = int(job_input.get("width", 832))
-        height = int(job_input.get("height", 480))
+        width = int(job_input.get("width", 512))
+        height = int(job_input.get("height", 384))
+
+        print(f"🚀 بدء معالجة الطلب: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
 
         with pipeline_lock:
-            # تنفيذ الاستدعاء للنموذج مع الحفاظ على القفل التزامني
             output = pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -178,22 +185,31 @@ def handler(event):
 
         raw_frames = output[0] if isinstance(output, (list, tuple)) and len(output) > 0 else output
         
-        # تطبيع وتوحيد أبعاد الإطارات لحل مشكلة الـ unpacking نهائياً
+        # طباعة تفاصيل التشخيص للأبعاد للتأكد منها
+        print(f"🔍 تشخيص الإطارات الخام -> type: {type(raw_frames)}, shape/len: {getattr(raw_frames, 'shape', len(raw_frames) if hasattr(raw_frames, '__len__') else 'unknown')}")
+
         video_frames = normalize_video_frames(raw_frames)
 
         if video_frames is None or len(video_frames) == 0:
-            return {"status": "error", "message": "قائمة الإطارات فارغة."}
+            return {"status": "error", "message": "قائمة الإطارات فارغة بعد التطبيع."}
 
         video_path = "/tmp/output.mp4"
         export_to_video(video_frames, video_path, fps=fps)
 
+        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+            return {"status": "error", "message": "فشل تصدير الفيديو: الملف الناتج فارغ أو غير موجود."}
+
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+        print("تم توليد وتصدير الفيديو بنجاح!")
         return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
+        print("="*50)
+        print("❌ حدث خطأ استثنائي أثناء تنفيذ الطلب (Handler Error):")
         traceback.print_exc()
+        print("="*50)
         torch.cuda.empty_cache()
         return {"status": "error", "message": str(e)}
 
