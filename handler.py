@@ -25,8 +25,8 @@ pipeline_lock = threading.Lock()
 # Model load at startup
 # -------------------------
 try:
-    # استخدام نسخة Wan2.1 الخفيفة والمناسبة للـ Serverless
-    MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B"
+    # استخدام المسار الرسمي الصحيح والموثوق لموديل Wan2.1 في Diffusers
+    MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 
     pipeline = WanPipeline.from_pretrained(
         MODEL_ID,
@@ -110,7 +110,7 @@ def handler(event):
         height = int(job_input.get("height", 480))
 
         with pipeline_lock:
-            # تنفيذ الاستدعاء للنموذج الجديد مع الحفاظ على القفل التزامني
+            # تنفيذ الاستدعاء للنموذج مع الحفاظ على القفل التزامني
             output = pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
