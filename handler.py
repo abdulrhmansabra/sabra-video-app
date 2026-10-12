@@ -49,7 +49,7 @@ except Exception as e:
 
 
 # -------------------------
-# Frame Normalization Helpers (المصححة للشكل الخماسي)
+# Frame Normalization Helpers (المصححة لضبط الألوان وعكس القنوات)
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"):
@@ -60,35 +60,54 @@ def to_numpy(x):
         x = x.numpy()
     return x
 
+def normalize_frame(frame):
+    frame = to_numpy(frame)
+    frame = np.asarray(frame)
+
+    frame = np.squeeze(frame)
+
+    if frame.ndim == 2:
+        frame = frame[..., None]
+
+    while frame.ndim > 3:
+        frame = frame[0]
+
+    if frame.ndim == 2:
+        frame = frame[..., None]
+
+    # معالجة channels-first لو كانت (C, H, W) -> (H, W, C)
+    if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
+        frame = np.transpose(frame, (1, 2, 0))
+
+    # ضبط النطاق اللوني
+    if np.issubdtype(frame.dtype, np.floating) or frame.min() < 0 or frame.max() <= 1.0:
+        if frame.min() < 0:
+            frame = (frame + 1.0) / 2.0
+        frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
+    else:
+        frame = frame.clip(0, 255).astype(np.uint8)
+
+    # تصحيح قنوات الألوان (عكس القنوات لتظهر الألوان طبيعية تماماً)
+    if frame.ndim == 3 and frame.shape[-1] == 3:
+        frame = frame[..., ::-1]
+
+    return frame
+
 def normalize_video_frames(video_frames):
     raw_frames = to_numpy(video_frames)
     
-    # إذا كانت المصفوفة تحمل أبعاد Batch في البداية مثل (1, Frames, H, W, C)
     if raw_frames.ndim == 5:
-        raw_frames = raw_frames[0]  # تصبح (Frames, H, W, C)
+        raw_frames = raw_frames[0]  # إزالة الـ Batch
     elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1:
         raw_frames = raw_frames[0]
 
     out = []
-    # فك الإطارات حبة حبة بناءً على المحور الأول (عدد الإطارات)
     for i in range(raw_frames.shape[0]):
         fr = raw_frames[i]
-        fr = np.squeeze(fr)
-        
-        # التأكد من أن الأبعاد (H, W, C)
-        if fr.ndim == 3 and fr.shape[0] in (1, 3, 4) and fr.shape[-1] not in (1, 3, 4):
-            fr = np.transpose(fr, (1, 2, 0))
-
-        # ضبط النطاق اللوني وتصحيحه لمنع الألوان المعكوسة أو الحرارية
-        if np.issubdtype(fr.dtype, np.floating) or fr.min() < 0 or fr.max() <= 1.0:
-            if fr.min() < 0:
-                fr = (fr + 1.0) / 2.0
-            fr = (fr * 255.0).clip(0, 255).astype(np.uint8)
-        else:
-            fr = fr.clip(0, 255).astype(np.uint8)
-            
-        out.append(fr)
-        
+        try:
+            out.append(normalize_frame(fr))
+        except Exception as e:
+            print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
     return out
 
 
@@ -173,10 +192,8 @@ def handler(event):
         if output is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
 
-        # طباعة تفاصيل التشخيص للأبعاد للتأكد منها
         print(f"🔍 تشخيص الإطارات الخام -> type: {type(output)}, shape/len: {getattr(output, 'shape', len(output) if hasattr(output, '__len__') else 'unknown')}")
 
-        # تمرير الـ output مباشرة لدالة التطبيع للتعامل مع الشكل الخماسي
         video_frames = normalize_video_frames(output)
 
         if video_frames is None or len(video_frames) == 0:
