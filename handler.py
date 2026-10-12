@@ -126,8 +126,8 @@ def handler(event):
         if output is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
 
-        video_frames = output[0] if isinstance(output, list) and len(output) > 0 else output
-        if not video_frames:
+        video_frames = output[0] if isinstance(output, (list, tuple)) and len(output) > 0 else output
+        if video_frames is None or (hasattr(video_frames, "__len__") and len(video_frames) == 0):
             return {"status": "error", "message": "قائمة الإطارات فارغة."}
 
         video_path = "/tmp/output.mp4"
