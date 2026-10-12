@@ -16,19 +16,17 @@ HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
     """
-    بعض الإصدارات تستخدم token=
-    وبعضها تستخدم use_auth_token=
-    نجهز kwargs بالطريقتين ونستخدم اللي يشتغل.
+    تجهيز معاملات المصادقة بناءً على المتوفر
     """
     if not HF_TOKEN:
         return {}
     return {"token": HF_TOKEN, "use_auth_token": HF_TOKEN}
 
-# تحميل النماذج عند الإقلاع (يمكن نقلها داخل handler إذا تبغى lazy load)
 try:
+    # التصحيح هنا: استخدام weight_name لتحميل ملف الأوزان الصحيح من الجذر مباشرة
     adapter = MotionAdapter.from_pretrained(
         "ByteDance/AnimateDiff-Lightning",
-        subfolder="animatediff_motion_adapter_4step",
+        weight_name="animatediff_lightning_4step_diffusers.safetensors",
         torch_dtype=torch.float16,
         **_token_kwargs()
     )
@@ -64,7 +62,6 @@ try:
     MODEL_READY = True
 
 except Exception as e:
-    # لا تخلي العامل ينهار بصمت ويعيد التشغيل بدون سبب مفهوم
     print(f"فشل تحميل النماذج أثناء الإقلاع: {e}")
     MODEL_READY = False
     ip_adapter_loaded = False
@@ -91,10 +88,9 @@ def load_image_from_input(img_input):
 
 def handler(event):
     if not MODEL_READY or pipeline is None:
-        # ارجع خطأ واضح بدل ما يطيح العامل ويصير restart loop
         return {
             "status": "error",
-            "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs لمعرفة سبب الفشل (غالباً توكن HF أو صلاحيات الموديل أو إصدارات المكتبات)."
+            "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs لمعرفة سبب الفشل."
         }
 
     try:
