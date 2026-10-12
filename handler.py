@@ -41,9 +41,9 @@ try:
     missing, unexpected = adapter.load_state_dict(state_dict, strict=False)
     print(f"Loaded Lightning weights. Missing={len(missing)} Unexpected={len(unexpected)}")
 
-    # 3. إعداد الـ Pipeline الأساسي
+    # 3. إعداد الـ Pipeline الأساسي بالمستودع الصحيح
     pipeline = AnimateDiffPipeline.from_pretrained(
-        "emilianJR/Realistic_Vision_v5.0_noVAE",
+        "SG161222/Realistic_Vision_V5.0_noVAE",
         motion_adapter=adapter,
         torch_dtype=torch.float16,
         **_token_kwargs()
