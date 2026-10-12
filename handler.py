@@ -1,3 +1,20 @@
+import os
+import torch
+from PIL import Image
+import requests
+from io import BytesIO
+import base64
+import traceback
+
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
+
+from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
+from diffusers.utils import export_to_video
+import runpod
+
+# (مفترض أن تحميل النموذج والـ pipeline_lock معرفة مسبقاً في ملفك)
+
 def handler(event):
     if not MODEL_READY or pipeline is None:
         return {"status": "error", "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs."}
@@ -42,6 +59,9 @@ def handler(event):
         with pipeline_lock:
             output = pipeline(**kwargs)
 
+        # تفريغ ذاكرة الكارت فوراً بعد التوليد لمنع امتلاء الـ VRAM
+        torch.cuda.empty_cache()
+
         frames = None
         if hasattr(output, "frames"):
             frames = output.frames
@@ -65,4 +85,5 @@ def handler(event):
 
     except Exception as e:
         traceback.print_exc()
+        torch.cuda.empty_cache()
         return {"status": "error", "message": str(e)}
