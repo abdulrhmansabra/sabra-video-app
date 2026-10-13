@@ -1,4 +1,7 @@
 import os
+# حل مشكلة تجزئة الذاكرة (Memory Fragmentation) لمنع أخطاء الـ OOM في اللحظات الأخيرة
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 import numpy as np
 from PIL import Image
@@ -12,7 +15,7 @@ import cv2
 from diffusers import CogVideoXImageToVideoPipeline
 import runpod
 
-print("🚀8 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
+print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -22,7 +25,7 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video بالطريقة السليمة والنظيفة
+# تحميل نموذج CogVideoX-5B Image-to-Video
 # -------------------------
 try:
     MODEL_ID = "THUDM/CogVideoX-5b-I2V"
@@ -35,10 +38,10 @@ try:
     # توزيع الحمل بذكاء بين الـ VRAM والـ RAM
     i2v_pipeline.enable_model_cpu_offload()
     
-    # تفعيل Slicing فقط لمنع الـ OOM بدون أي مشاكل في الأنواع أو تشوهات بكسلية
+    # تفعيل Slicing فقط لحماية الذاكرة ودون أي تعارض أو تشوهات بكسلية
     i2v_pipeline.vae.enable_slicing()
 
-    print("✅ تم تحميل النموذج وإعداد الحماية بشكل نظيف وبدون أخطاء!")
+    print("✅ تم تحميل النموذج وتفعيل إعدادات الذاكرة المرنة بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
@@ -186,7 +189,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم إنتاج وتصدير الفيديو بنجاح تام وبدون أخطاء!")
+        print("✨ تم إنشاء وتصدير الفيديو بنجاح تام!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
