@@ -22,7 +22,7 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video مع ضبط إعدادات الـ VAE لمنع تشوهات المربعات
+# تحميل نموذج CogVideoX-5B Image-to-Video
 # -------------------------
 try:
     MODEL_ID = "THUDM/CogVideoX-5b-I2V"
@@ -35,11 +35,10 @@ try:
     # توزيع الحمل بذكاء بين الـ VRAM والـ RAM للسيرفر
     i2v_pipeline.enable_model_cpu_offload()
     
-    # تفعيل Slicing وتحويل الـ VAE إلى float32 لمنع مشكلة شبكة المربعات البكسلية نهائياً
+    # تفعيل Slicing فقط لحماية الذاكرة بدون مشاكل في أنواع البيانات
     i2v_pipeline.vae.enable_slicing()
-    i2v_pipeline.vae.to(torch.float32)
 
-    print("✅ تم تحميل نموذج CogVideoX وتعديل إعدادات الـ VAE بنجاح!")
+    print("✅ تم تحميل نموذج CogVideoX وتعديل إعدادات الحماية بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
@@ -54,7 +53,7 @@ except Exception as e:
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"): x = x.detach()
-    if hasattr(x, "cpu"): x = x.cpu()
+    if hasattr(x, "cpu"): x = cpu = x.cpu()
     if hasattr(x, "numpy"): x = x.numpy()
     return x
 
@@ -148,9 +147,7 @@ def handler(event):
         guidance_scale = float(job_input.get("guidance_scale", 6.0))
         fps = int(job_input.get("fps", 8))
         
-        # تحديد عدد الإطارات (33 إطاراً = ~4 ثوانٍ متوازنة وآمنة للذاكرة)
         num_frames = int(job_input.get("num_frames", 33))
-        
         width = int(job_input.get("width", 720))   
         height = int(job_input.get("height", 480))
 
@@ -189,7 +186,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم تحريك الصورة وتصديرها بنجاح وبدون أي تشوهات بكسلية!")
+        print("✨ تم تحريك الصورة وتصديرها بنجاح تام!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
