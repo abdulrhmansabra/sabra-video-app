@@ -9,50 +9,43 @@ import traceback
 import threading
 import cv2
 
-from diffusers import LTXPipeline, LTXImageToVideoPipeline
+from diffusers import WanImageToVideoPipeline
 import runpod
 
-print("جاري تحميل نماذج LTX-Video مع تفعيل إدارة الذاكرة الذكية (CPU Offload)...")
+print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور Wan2.1-I2V-14B (FP8)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
     return {"token": HF_TOKEN} if HF_TOKEN else {}
 
-# قفل تزامني لتجنب تداخل الطلبات
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل النماذج عند الإقلاع وتفريغ الـ VRAM تلقائياً
+# تحميل نموذج الصورة فقط
 # -------------------------
 try:
-    MODEL_ID = "Lightricks/LTX-Video"
-
-    # 1. تحميل النموذج الأساسي وتفعيل Offload لمنع OOM
-    t2v_pipeline = LTXPipeline.from_pretrained(
-        MODEL_ID, 
-        torch_dtype=torch.bfloat16,
+    I2V_MODEL_ID = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+    
+    i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
+        I2V_MODEL_ID,
+        torch_dtype=torch.float8_e4m3fn,  # ضغط FP8 لتوفير VRAM
         **_token_kwargs()
     )
-    t2v_pipeline.enable_model_cpu_offload()
-
-    # 2. اشتقاق بايبلاين الصورة وتفعيل الـ Offload له أيضاً
-    i2v_pipeline = LTXImageToVideoPipeline.from_pipe(t2v_pipeline)
     i2v_pipeline.enable_model_cpu_offload()
-    
-    print("✅ تم تحميل ونشر نماذج LTX بنجاح وبأمان كامل للذاكرة!")
+
+    print("✅ تم تحميل نموذج تحريك الصور بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
-    print("❌ فشل تحميل النماذج:")
+    print("❌ فشل تحميل النموذج:")
     traceback.print_exc()
     MODEL_READY = False
-    t2v_pipeline = None
     i2v_pipeline = None
 
 
 # -------------------------
-# دوال معالجة وتصدير الإطارات
+# دوال معالجة وتصدير الفيديو
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"): x = x.detach()
@@ -76,10 +69,7 @@ def normalize_frame(frame):
 
 def normalize_video_frames(video_frames):
     if isinstance(video_frames, list):
-        out = []
-        for fr in video_frames:
-            out.append(normalize_frame(fr))
-        return out
+        return [normalize_frame(fr) for fr in video_frames]
 
     raw_frames = to_numpy(video_frames)
     if not isinstance(raw_frames, np.ndarray):
@@ -95,7 +85,7 @@ def normalize_video_frames(video_frames):
         try:
             out.append(normalize_frame(raw_frames[i]))
         except Exception as e:
-            print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
+            print(f"⚠️ تحذير في الإطار {i}: {e}")
     return out
 
 def export_video_with_opencv(frames, output_path, fps=16):
@@ -123,71 +113,65 @@ def load_image_from_input(img_input: str):
             data = base64.b64decode(img_input)
             return Image.open(BytesIO(data)).convert("RGB")
     except Exception as e:
-        print(f"خطأ في قراءة الصورة: الخروج بدون صورة. التفاصيل: {e}")
+        print(f"خطأ في قراءة الصورة: {e}")
         return None
 
 
 # -------------------------
-# RunPod Handler الأساسي
+# RunPod Handler
 # -------------------------
 def handler(event):
-    if not MODEL_READY or t2v_pipeline is None or i2v_pipeline is None:
-        return {"status": "error", "message": "النماذج غير محملة أو فشل إقلاع السيرفر."}
+    if not MODEL_READY:
+        return {"status": "error", "message": "النموذج غير محمل على السيرفر."}
 
     try:
         job_input = event.get("input") or {}
         
         prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "blurry, distorted face, low quality, static, bad anatomy")
+        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, bad motion, static")
         
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
 
+        if pil_img is None:
+            return {"status": "error", "message": "يلزم إرسال صورة (image) لتشغيل نموذج التحريك."}
+
         if not prompt or not prompt.strip():
-            return {"status": "error", "message": "يجب إرسال prompt على الأقل."}
+            return {"status": "error", "message": "يلزم إرسال وصف الحركة (prompt) مع الصورة."}
 
         num_inference_steps = int(job_input.get("num_inference_steps", 30))
-        guidance_scale = float(job_input.get("guidance_scale", 7.5))
-        num_frames = int(job_input.get("num_frames", 49)) 
+        guidance_scale = float(job_input.get("guidance_scale", 5.0))
         fps = int(job_input.get("fps", 16))
-        width = int(job_input.get("width", 768))   
-        height = int(job_input.get("height", 512))
+        
+        width = int(job_input.get("width", 832))   
+        height = int(job_input.get("height", 480))
 
-        pipeline_kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "num_frames": num_frames,
-            "height": height,
-            "width": width,
-        }
-
-        # التوجيه الذكي التلقائي بناءً على إرسال المستخدم للصورة أم لا
-        if pil_img is not None:
-            pil_img = pil_img.resize((width, height))
-            pipeline_kwargs["image"] = pil_img
-            active_pipeline = i2v_pipeline
-            print(f"🚀 بدء معالجة Image-to-Video: {width}x{height}")
-        else:
-            active_pipeline = t2v_pipeline
-            print(f"🚀 بدء توليد Text-to-Video من الصفر: {width}x{height}")
+        pil_img = pil_img.resize((width, height))
+        print(f"🎬 جاري تحريك الصورة باستخدام Wan2.1 لدقة {width}x{height}...")
 
         with pipeline_lock:
-            output_result = active_pipeline(**pipeline_kwargs).frames
+            output_result = i2v_pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                image=pil_img,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                height=height,
+                width=width,
+            ).frames
 
         torch.cuda.empty_cache()
 
         if output_result is None:
-            return {"status": "error", "message": "لم يتم إرجاع إطارات من النموذج."}
+            return {"status": "error", "message": "لم يرجع النموذج أية إطارات."}
 
         output = output_result[0] if isinstance(output_result, (list, tuple)) else output_result
         video_frames = normalize_video_frames(output)
 
         if not video_frames:
-            return {"status": "error", "message": "فشل تطبيع إطارات الفيديو."}
+            return {"status": "error", "message": "فشل تحويل إطارات الفيديو."}
 
-        video_path = "/tmp/output.mp4"
+        video_path = "/tmp/output_wan_i2v.mp4"
         export_video_with_opencv(video_frames, video_path, fps=fps)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
@@ -196,7 +180,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم توليد وتصدير الفيديو بنجاح!")
+        print("✨ تم تحريك الصورة بنجاح!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
