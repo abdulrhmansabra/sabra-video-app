@@ -9,15 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb1 libx11-xcb1 libgl1-mesa-glx libglib2.0-0 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# تثبيت PyTorch المستقر مع دعم CUDA 12.4 (يدعم FP8 بكفاءة عالية)
+# تثبيت PyTorch المستقر مع دعم CUDA 12.4
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخة من diffusers من المستودع الرسمي لضمان الدعم الكامل لـ Wan2.1 وإدارة الـ FP8
+# تثبيت أحدث نسخة من diffusers والمكتبات المكملة (تمت إضافة ftfy و regex هنا)
 RUN pip3 install --no-cache-dir \
     runpod accelerate transformers git+https://github.com/huggingface/diffusers.git safetensors huggingface_hub \
-    opencv-python requests sentencepiece protobuf imageio imageio-ffmpeg
+    opencv-python requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
 
 ENV PYTHONUNBUFFERED=1
 
