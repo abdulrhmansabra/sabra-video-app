@@ -3,10 +3,10 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# تثبيت الحزم الأساسية ومكتبات النظام لـ OpenCV و Video Processing
+# تثبيت الحزم الأساسية ومكتبات النظام لـ FFmpeg والمعالجة
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget ca-certificates \
-    libxcb1 libx11-xcb1 libgl1-mesa-glx libglib2.0-0 ffmpeg \
+    libgl1-mesa-glx libglib2.0-0 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # تثبيت PyTorch المستقر مع دعم CUDA 12.4
@@ -14,10 +14,10 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخة من diffusers والمكتبات المكملة
+# تثبيت أحدث نسخة من diffusers والمكتبات المكملة مع ضمان وجود numpy و pillow وصيغة headless
 RUN pip3 install --no-cache-dir \
     runpod accelerate transformers git+https://github.com/huggingface/diffusers.git safetensors huggingface_hub \
-    opencv-python requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
+    numpy pillow opencv-python-headless requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
 
 ENV PYTHONUNBUFFERED=1
 
