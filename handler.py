@@ -9,197 +9,184 @@ import traceback
 import threading
 import cv2
 
-from diffusers import LTXPipeline
+from diffusers import LTXImageToVideoPipeline
 import runpod
 
-print("جاري تحميل وتهيئة نموذج LTX-Video...")
+print("جاري تحميل نموذج LTX-Video (Image-to-Video & Text-to-Video Pipeline)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
     return {"token": HF_TOKEN} if HF_TOKEN else {}
 
-# قفل تزامني لحماية الحالة العالمية للـ Pipeline من التداخل
+# قفل تزامني لتجنب التداخل
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# Model load at startup
+# تحميل النموذج عند الإقلاع
 # -------------------------
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    # تحميل البايبلاين الرسمي المعتمد لـ LTX-Video
-    pipeline = LTXPipeline.from_pretrained(
+    # استخدام LTXImageToVideoPipeline لأنه يدعم النص والصورة معاً بكفاءة عالية
+    pipeline = LTXImageToVideoPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
     
     pipeline.to("cuda")
-
-    print("نموذج LTX-Video جاهز بالكامل للاستجابة!")
+    print("✅ تم تحميل نموذج LTX-Video بنجاح وجاهز للعمل!")
     MODEL_READY = True
 
 except Exception as e:
-    print("="*50)
-    print("❌ فشل تحميل النماذج أثناء الإقلاع:")
+    print("❌ فشل تحميل النموذج:")
     traceback.print_exc()
-    print("="*50)
     MODEL_READY = False
     pipeline = None
 
 
 # -------------------------
-# Frame Normalization Helpers
+# معالجة وتصدير الإطارات
 # -------------------------
 def to_numpy(x):
-    if hasattr(x, "detach"):
-        x = x.detach()
-    if hasattr(x, "cpu"):
-        x = x.cpu()
-    if hasattr(x, "numpy"):
-        x = x.numpy()
+    if hasattr(x, "detach"): x = x.detach()
+    if hasattr(x, "cpu"): x = x.cpu()
+    if hasattr(x, "numpy"): x = x.numpy()
     return x
 
 def normalize_frame(frame):
     frame = to_numpy(frame)
-    frame = np.asarray(frame)
-
-    frame = np.squeeze(frame)
-
-    if frame.ndim == 2:
-        frame = frame[..., None]
-
-    while frame.ndim > 3:
-        frame = frame[0]
-
-    if frame.ndim == 2:
-        frame = frame[..., None]
-
-    # معالجة channels-first لو كانت (C, H, W) -> (H, W, C)
+    frame = np.squeeze(np.asarray(frame))
+    if frame.ndim == 2: frame = frame[..., None]
+    while frame.ndim > 3: frame = frame[0]
+    if frame.ndim == 2: frame = frame[..., None]
     if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
         frame = np.transpose(frame, (1, 2, 0))
-
-    # ضبط النطاق اللوني الحقيقي للموديل [0, 1] وتحويله إلى uint8
     if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
         frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
     else:
         frame = frame.clip(0, 255).astype(np.uint8)
-
     return frame
 
 def normalize_video_frames(video_frames):
     raw_frames = to_numpy(video_frames)
+    if raw_frames.ndim == 5: raw_frames = raw_frames[0]
+    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1: raw_frames = raw_frames[0]
     
-    if raw_frames.ndim == 5:
-        raw_frames = raw_frames[0]  # إزالة الـ Batch
-    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1:
-        raw_frames = raw_frames[0]
-
     out = []
     for i in range(raw_frames.shape[0]):
-        fr = raw_frames[i]
         try:
-            out.append(normalize_frame(fr))
-        except Exception as e:
-            print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
+            out.append(normalize_frame(raw_frames[i]))
+        except Exception:
+            pass
     return out
 
-def export_video_with_opencv(frames, output_path, fps=15):
-    if not frames:
-        raise ValueError("قائمة الإطارات فارغة، لا يمكن التصدير.")
-    
+def export_video_with_opencv(frames, output_path, fps=16):
+    if not frames: raise ValueError("الإطارات فارغة.")
     height, width, _ = frames[0].shape
-    # استخدام ترميز mp4v لضمان توافق الفيديو وعرضه بسلاسة داخل المتصفح و RunPod
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
     for frame in frames:
-        # عكس القنوات لتصحيح الألوان نهائياً وتجنب مشكلة الكاميرا الحرارية
-        corrected_frame = frame[..., ::-1]
-        out.write(corrected_frame)
-        
+        out.write(frame[..., ::-1]) # تصحيح الألوان
     out.release()
+
+def load_image_from_input(img_input: str):
+    if img_input is None: return None
+    if not isinstance(img_input, str): return None
+    img_input = img_input.strip()
+    if img_input == "": return None
+    try:
+        if img_input.startswith("http://") or img_input.startswith("https://"):
+            response = requests.get(img_input, timeout=30)
+            response.raise_for_status()
+            return Image.open(BytesIO(response.content)).convert("RGB")
+        else:
+            if "," in img_input:
+                img_input = img_input.split(",", 1)[1]
+            data = base64.b64decode(img_input)
+            return Image.open(BytesIO(data)).convert("RGB")
+    except Exception as e:
+        print(f"خطأ في قراءة الصورة: {e}")
+        return None
 
 
 # -------------------------
-# RunPod Handler
+# RunPod Handler الأساسي
 # -------------------------
 def handler(event):
     if not MODEL_READY or pipeline is None:
-        return {"status": "error", "message": "النماذج لم تُحمّل بنجاح عند الإقلاع. راجع Logs للتفاصيل."}
+        return {"status": "error", "message": "النموذج غير محمل."}
 
     try:
         job_input = event.get("input") or {}
-
-        prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt")
-
-        if prompt is None or (isinstance(prompt, str) and prompt.strip() == ""):
-            prompt = "Cinematic shot, highly detailed, smooth motion, high quality."
-
-        if negative_prompt is None:
-            negative_prompt = (
-                "Bright tones, overexposed, static, blurred details, subtitles, style, works, "
-                "paintings, images, static, overall gray, worst quality, low quality, JPEG compression "
-                "residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, "
-                "disfigured, misshapen limbs, fused fingers, still picture, messy background"
-            )
-
-        num_inference_steps = int(job_input.get("num_inference_steps", 25))
-        guidance_scale = float(job_input.get("guidance_scale", 7.5))
-        num_frames = int(job_input.get("num_frames", 49))
-        fps = int(job_input.get("fps", 16))
         
-        width = int(job_input.get("width", 640))
-        height = int(job_input.get("height", 352))
+        prompt = job_input.get("prompt")
+        negative_prompt = job_input.get("negative_prompt", "blurry, distorted face, low quality, static, bad anatomy")
+        
+        # التقاط الصورة (اختياري: يدعم Text-to-Video و Image-to-Video معاً)
+        image_input = job_input.get("image_reference") or job_input.get("image")
+        pil_img = load_image_from_input(image_input)
 
-        print(f"🚀 بدء توليد LTX-Video: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
+        if not prompt or not prompt.strip():
+            if pil_img is not None:
+                prompt = "Cinematic motion, smooth camera movement, high quality"
+            else:
+                return {"status": "error", "message": "يجب إرسال prompt أو image على الأقل."}
+
+        num_inference_steps = int(job_input.get("num_inference_steps", 30))
+        guidance_scale = float(job_input.get("guidance_scale", 7.5))
+        num_frames = int(job_input.get("num_frames", 49)) # يجب أن تتوافق مع متطلبات النموذج (frames % 8 == 1)
+        fps = int(job_input.get("fps", 16))
+        width = int(job_input.get("width", 768))   # مقاسات قياسية لـ LTX
+        height = int(job_input.get("height", 512))
+
+        pipeline_kwargs = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+            "num_frames": num_frames,
+            "height": height,
+            "width": width,
+        }
+
+        if pil_img is not None:
+            # ضبط المقاسات وتمرير الصورة لتثبيت الملامح
+            pil_img = pil_img.resize((width, height))
+            pipeline_kwargs["image"] = pil_img
+            print(f"🚀 بدء توليد LTX Image-to-Video مع تثبيت الملامح: {width}x{height}")
+        else:
+            print(f"🚀 بدء توليد LTX Text-to-Video: {width}x{height}")
 
         with pipeline_lock:
-            # استدعاء النموذج بالمعاملات المدعومة رسمياً فقط
-            output_result = pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-            ).frames
+            output_result = pipeline(**pipeline_kwargs).frames
 
         torch.cuda.empty_cache()
 
         if output_result is None:
-            return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
+            return {"status": "error", "message": "لم يتم إرجاع إطارات من النموذج."}
 
-        if isinstance(output_result, (list, tuple)):
-            output = output_result[0]
-        else:
-            output = output_result
-
+        output = output_result[0] if isinstance(output_result, (list, tuple)) else output_result
         video_frames = normalize_video_frames(output)
 
-        if video_frames is None or len(video_frames) == 0:
-            return {"status": "error", "message": "قائمة الإطارات فارغة بعد التطبيع."}
+        if not video_frames:
+            return {"status": "error", "message": "فشل تطبيع إطارات الفيديو."}
 
         video_path = "/tmp/output.mp4"
         export_video_with_opencv(video_frames, video_path, fps=fps)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            return {"status": "error", "message": "فشل تصدير الفيديو: الملف الناتج فارغ أو غير موجود."}
+            return {"status": "error", "message": "ملف الفيديو الناتج فارغ."}
 
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح بواسطة LTX-Video!")
-        return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
+        print("✨ تم توليد وتصدير الفيديو بنجاح بواسطة LTX-Video!")
+        return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
-        print("="*50)
-        print("❌ حدث خطأ استثنائي أثناء تنفيذ الطلب (Handler Error):")
         traceback.print_exc()
-        print("="*50)
         torch.cuda.empty_cache()
         return {"status": "error", "message": str(e)}
 
