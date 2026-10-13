@@ -12,7 +12,7 @@ import cv2
 from diffusers import LTXPipeline
 import runpod
 
-print("جاري تحميل وتهيئة نموذج LTX-Video للصور إلى فيديو...")
+print("جاري تحميل وتهيئة نموذج LTX-Video...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -26,7 +26,6 @@ pipeline_lock = threading.Lock()
 # Model load at startup
 # -------------------------
 try:
-    # المستودع الرسمي المعتمد لنموذج LTX-Video
     MODEL_ID = "Lightricks/LTX-Video"
 
     # تحميل البايبلاين الرسمي الموحد الداعم للنص والصور معاً
@@ -130,7 +129,6 @@ def load_image_from_input(img_input: str):
     if img_input is None:
         return None
     if not isinstance(img_input, str):
-        print(f"image must be a string. got: {type(img_input)}")
         return None
 
     img_input = img_input.strip()
@@ -165,17 +163,19 @@ def handler(event):
         prompt = job_input.get("prompt")
         negative_prompt = job_input.get("negative_prompt")
 
-        # التقاط رابط الصورة من حقل image_reference المرسل في الـ JSON
+        # التقاط رابط الصورة من حقل image_reference أو image (اختياري)
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
-        has_image = pil_img is not None
 
-        if not has_image:
-            return {"status": "error", "message": "يجب إرفاق رابط صورة صالح في حقل image_reference لتثبيت الملامح."}
-
+        # 1. التعامل مع حالة غياب الـ Prompt
         if prompt is None or (isinstance(prompt, str) and prompt.strip() == ""):
-            prompt = "cinematic close-up shot maintaining exact facial features"
+            if pil_img is not None:
+                # لو أرسل صورة فقط بدون برومفت، نضع وصفاً افتراضياً لتحريكها وتثبيت الملامح
+                prompt = "cinematic motion, smooth camera movement, high quality, maintaining exact facial features"
+            else:
+                return {"status": "error", "message": "يجب إرسال prompt أو image على الأقل."}
 
+        # 2. التعامل مع الـ Negative Prompt الافتراضي
         if negative_prompt is None:
             negative_prompt = (
                 "Bright tones, overexposed, static, blurred details, subtitles, style, works, "
@@ -193,20 +193,26 @@ def handler(event):
         width = int(job_input.get("width", 640))
         height = int(job_input.get("height", 352))
 
-        print(f"🚀 بدء معالجة الطلب: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
+        # 3. بناء معاملات البايبلاين بشكل ديناميكي (يدعم النص وصورة/أو نص فقط)
+        pipeline_kwargs = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+            "num_frames": num_frames,
+            "height": height,
+            "width": width,
+        }
+
+        # إذا وُجدت الصورة، تضاف للمعاملات لتفعيل وضع Image-to-Video وتثبيت الملامح تلقائياً
+        if pil_img is not None:
+            pipeline_kwargs["image"] = pil_img
+            print(f"🚀 بدء معالجة Image-to-Video (مع تثبيت الملامح): prompt='{prompt}'")
+        else:
+            print(f"🚀 بدء معالجة Text-to-Video (نص فقط): prompt='{prompt}'")
 
         with pipeline_lock:
-            # تمرير الصورة للبايبلاين عبر معامل image لتثبيت ملامح الوجه والشخصية
-            output_result = pipeline(
-                image=pil_img,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-            ).frames
+            output_result = pipeline(**pipeline_kwargs).frames
 
         torch.cuda.empty_cache()
 
@@ -217,8 +223,6 @@ def handler(event):
             output = output_result[0]
         else:
             output = output_result
-
-        print(f"🔍 تشخيص الإطارات الخام -> type: {type(output)}, shape/len: {getattr(output, 'shape', len(output) if hasattr(output, '__len__') else 'unknown')}")
 
         video_frames = normalize_video_frames(output)
 
@@ -234,7 +238,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح بمعايير الألوان الدقيقة والدقة العالية!")
+        print("تم توليد وتصدير الفيديو بنجاح!")
         return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
@@ -247,4 +251,4 @@ def handler(event):
 
 
 if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler}) 
+    runpod.serverless.start({"handler": handler})
