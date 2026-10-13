@@ -14,7 +14,7 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخة من diffusers والمكتبات المكملة (تمت إضافة ftfy و regex هنا)
+# تثبيت أحدث نسخة من diffusers والمكتبات المكملة
 RUN pip3 install --no-cache-dir \
     runpod accelerate transformers git+https://github.com/huggingface/diffusers.git safetensors huggingface_hub \
     opencv-python requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
