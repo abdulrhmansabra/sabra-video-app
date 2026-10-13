@@ -9,10 +9,10 @@ import traceback
 import threading
 import cv2
 
-from diffusers import AutoencoderKLWan, WanPipeline
+from diffusers import LTXPipeline
 import runpod
 
-print("جاري تحميل وتهيئة نموذج Wan2.1 مع VAE المعدل...")
+print("جاري تحميل وتهيئة نموذج LTX-Video للصور إلى فيديو...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -26,27 +26,19 @@ pipeline_lock = threading.Lock()
 # Model load at startup
 # -------------------------
 try:
-    MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
+    # المستودع الرسمي المعتمد لنموذج LTX-Video
+    MODEL_ID = "Lightricks/LTX-Video"
 
-    # تحميل الـ VAE بدقة float32 لمنع تشويه الألوان والبهتان
-    vae = AutoencoderKLWan.from_pretrained(
+    # تحميل البايبلاين الرسمي الموحد الداعم للنص والصور معاً
+    pipeline = LTXPipeline.from_pretrained(
         MODEL_ID, 
-        subfolder="vae", 
-        torch_dtype=torch.float32,
-        **_token_kwargs()
-    )
-
-    # تحميل البايبلاين مع ربط الـ VAE المعدل
-    pipeline = WanPipeline.from_pretrained(
-        MODEL_ID,
-        vae=vae,
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
     
     pipeline.to("cuda")
 
-    print("نموذج Wan2.1 جاهز بالكامل للاستجابة بأفضل جودة ألوان!")
+    print("نموذج LTX-Video جاهز بالكامل للاستجابة!")
     MODEL_READY = True
 
 except Exception as e:
@@ -173,15 +165,16 @@ def handler(event):
         prompt = job_input.get("prompt")
         negative_prompt = job_input.get("negative_prompt")
 
-        image_input = job_input.get("image")
+        # التقاط رابط الصورة من حقل image_reference المرسل في الـ JSON
+        image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
         has_image = pil_img is not None
 
+        if not has_image:
+            return {"status": "error", "message": "يجب إرفاق رابط صورة صالح في حقل image_reference لتثبيت الملامح."}
+
         if prompt is None or (isinstance(prompt, str) and prompt.strip() == ""):
-            if has_image:
-                prompt = "high quality, cinematic"
-            else:
-                return {"status": "error", "message": "لازم ترسل prompt أو image على الأقل."}
+            prompt = "cinematic close-up shot maintaining exact facial features"
 
         if negative_prompt is None:
             negative_prompt = (
@@ -192,19 +185,20 @@ def handler(event):
                 "many people in the background, walking backwards"
             )
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 30))  # رفع الخطوات لضمان دقة الاستيعاب
-        guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        num_frames = int(job_input.get("num_frames", 81))  # مطابق للاختبار الناجح
-        fps = int(job_input.get("fps", 15))
+        num_inference_steps = int(job_input.get("num_inference_steps", 25))
+        guidance_scale = float(job_input.get("guidance_scale", 7.5))
+        num_frames = int(job_input.get("num_frames", 49))
+        fps = int(job_input.get("fps", 16))
         
-        width = int(job_input.get("width", 832))   # مقاسات الكود الناجح
-        height = int(job_input.get("height", 480))
+        width = int(job_input.get("width", 640))
+        height = int(job_input.get("height", 352))
 
         print(f"🚀 بدء معالجة الطلب: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
 
         with pipeline_lock:
-            # استخراج الإطارات المطلوبة مباشرة
+            # تمرير الصورة للبايبلاين عبر معامل image لتثبيت ملامح الوجه والشخصية
             output_result = pipeline(
+                image=pil_img,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 num_inference_steps=num_inference_steps,
@@ -219,7 +213,6 @@ def handler(event):
         if output_result is None:
             return {"status": "error", "message": "فشل التوليد: لم يتم إرجاع إطارات من الـ pipeline."}
 
-        # التعامل مع شكل مخرجات الـ pipeline سواء كانت tuple أو قائمة مباشرة
         if isinstance(output_result, (list, tuple)):
             output = output_result[0]
         else:
@@ -254,4 +247,4 @@ def handler(event):
 
 
 if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler})
+    runpod.serverless.start({"handler": handler}) 
