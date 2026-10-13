@@ -1,6 +1,4 @@
 import os
-os.environ["HF_HOME"] = "/workspace/.cache/huggingface"
-
 import torch
 import numpy as np
 from PIL import Image
