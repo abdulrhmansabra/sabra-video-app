@@ -28,7 +28,6 @@ pipeline_lock = threading.Lock()
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    # استخدام LTXImageToVideoPipeline لأنه يدعم النص والصورة معاً بكفاءة عالية
     pipeline = LTXImageToVideoPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
@@ -70,16 +69,28 @@ def normalize_frame(frame):
     return frame
 
 def normalize_video_frames(video_frames):
+    # معالجة آمنة تماماً لو كانت النتيجة قائمة (List) أو تينسور
+    if isinstance(video_frames, list):
+        out = []
+        for fr in video_frames:
+            out.append(normalize_frame(fr))
+        return out
+
     raw_frames = to_numpy(video_frames)
-    if raw_frames.ndim == 5: raw_frames = raw_frames[0]
-    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1: raw_frames = raw_frames[0]
+    if not isinstance(raw_frames, np.ndarray):
+        raw_frames = np.asarray(raw_frames)
+
+    if raw_frames.ndim == 5: 
+        raw_frames = raw_frames[0]
+    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1: 
+        raw_frames = raw_frames[0]
     
     out = []
     for i in range(raw_frames.shape[0]):
         try:
             out.append(normalize_frame(raw_frames[i]))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ تحذير: فشل تطبيع الإطار رقم {i}: {e}")
     return out
 
 def export_video_with_opencv(frames, output_path, fps=16):
@@ -88,7 +99,7 @@ def export_video_with_opencv(frames, output_path, fps=16):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     for frame in frames:
-        out.write(frame[..., ::-1]) # تصحيح الألوان
+        out.write(frame[..., ::-1]) # تصحيح الألوان نهائياً
     out.release()
 
 def load_image_from_input(img_input: str):
@@ -124,7 +135,7 @@ def handler(event):
         prompt = job_input.get("prompt")
         negative_prompt = job_input.get("negative_prompt", "blurry, distorted face, low quality, static, bad anatomy")
         
-        # التقاط الصورة (اختياري: يدعم Text-to-Video و Image-to-Video معاً)
+        # التقاط الصورة (اختياري: يدعم النص والصورة معاً)
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
 
@@ -136,9 +147,9 @@ def handler(event):
 
         num_inference_steps = int(job_input.get("num_inference_steps", 30))
         guidance_scale = float(job_input.get("guidance_scale", 7.5))
-        num_frames = int(job_input.get("num_frames", 49)) # يجب أن تتوافق مع متطلبات النموذج (frames % 8 == 1)
+        num_frames = int(job_input.get("num_frames", 49)) 
         fps = int(job_input.get("fps", 16))
-        width = int(job_input.get("width", 768))   # مقاسات قياسية لـ LTX
+        width = int(job_input.get("width", 768))   
         height = int(job_input.get("height", 512))
 
         pipeline_kwargs = {
@@ -152,7 +163,6 @@ def handler(event):
         }
 
         if pil_img is not None:
-            # ضبط المقاسات وتمرير الصورة لتثبيت الملامح
             pil_img = pil_img.resize((width, height))
             pipeline_kwargs["image"] = pil_img
             print(f"🚀 بدء توليد LTX Image-to-Video مع تثبيت الملامح: {width}x{height}")
