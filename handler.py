@@ -28,7 +28,7 @@ pipeline_lock = threading.Lock()
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    # تحميل البايبلاين الرسمي الموحد الداعم للنص والصور معاً
+    # تحميل البايبلاين الرسمي المعتمد لـ LTX-Video
     pipeline = LTXPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
@@ -123,34 +123,6 @@ def export_video_with_opencv(frames, output_path, fps=15):
 
 
 # -------------------------
-# Helpers
-# -------------------------
-def load_image_from_input(img_input: str):
-    if img_input is None:
-        return None
-    if not isinstance(img_input, str):
-        return None
-
-    img_input = img_input.strip()
-    if img_input == "":
-        return None
-
-    try:
-        if img_input.startswith("http://") or img_input.startswith("https://"):
-            response = requests.get(img_input, timeout=30)
-            response.raise_for_status()
-            return Image.open(BytesIO(response.content)).convert("RGB")
-        else:
-            if "," in img_input:
-                img_input = img_input.split(",", 1)[1]
-            data = base64.b64decode(img_input)
-            return Image.open(BytesIO(data)).convert("RGB")
-    except Exception as e:
-        print(f"خطأ في قراءة الصورة: {e}")
-        return None
-
-
-# -------------------------
 # RunPod Handler
 # -------------------------
 def handler(event):
@@ -163,26 +135,15 @@ def handler(event):
         prompt = job_input.get("prompt")
         negative_prompt = job_input.get("negative_prompt")
 
-        # التقاط رابط الصورة من حقل image_reference أو image (اختياري)
-        image_input = job_input.get("image_reference") or job_input.get("image")
-        pil_img = load_image_from_input(image_input)
-
-        # 1. التعامل مع حالة غياب الـ Prompt
         if prompt is None or (isinstance(prompt, str) and prompt.strip() == ""):
-            if pil_img is not None:
-                # لو أرسل صورة فقط بدون برومفت، نضع وصفاً افتراضياً لتحريكها وتثبيت الملامح
-                prompt = "cinematic motion, smooth camera movement, high quality, maintaining exact facial features"
-            else:
-                return {"status": "error", "message": "يجب إرسال prompt أو image على الأقل."}
+            prompt = "Cinematic shot, highly detailed, smooth motion, high quality."
 
-        # 2. التعامل مع الـ Negative Prompt الافتراضي
         if negative_prompt is None:
             negative_prompt = (
                 "Bright tones, overexposed, static, blurred details, subtitles, style, works, "
                 "paintings, images, static, overall gray, worst quality, low quality, JPEG compression "
                 "residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, "
-                "disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, "
-                "many people in the background, walking backwards"
+                "disfigured, misshapen limbs, fused fingers, still picture, messy background"
             )
 
         num_inference_steps = int(job_input.get("num_inference_steps", 25))
@@ -193,26 +154,19 @@ def handler(event):
         width = int(job_input.get("width", 640))
         height = int(job_input.get("height", 352))
 
-        # 3. بناء معاملات البايبلاين بشكل ديناميكي (يدعم النص وصورة/أو نص فقط)
-        pipeline_kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "num_frames": num_frames,
-            "height": height,
-            "width": width,
-        }
-
-        # إذا وُجدت الصورة، تضاف للمعاملات لتفعيل وضع Image-to-Video وتثبيت الملامح تلقائياً
-        if pil_img is not None:
-            pipeline_kwargs["image"] = pil_img
-            print(f"🚀 بدء معالجة Image-to-Video (مع تثبيت الملامح): prompt='{prompt}'")
-        else:
-            print(f"🚀 بدء معالجة Text-to-Video (نص فقط): prompt='{prompt}'")
+        print(f"🚀 بدء توليد LTX-Video: prompt='{prompt}', steps={num_inference_steps}, frames={num_frames}, size=({width}x{height})")
 
         with pipeline_lock:
-            output_result = pipeline(**pipeline_kwargs).frames
+            # استدعاء النموذج بالمعاملات المدعومة رسمياً فقط
+            output_result = pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+            ).frames
 
         torch.cuda.empty_cache()
 
@@ -238,7 +192,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("تم توليد وتصدير الفيديو بنجاح!")
+        print("تم توليد وتصدير الفيديو بنجاح بواسطة LTX-Video!")
         return {"status": "success", "message": "تم توليد الفيديو بنجاح", "video_base64": video_base64}
 
     except Exception as e:
