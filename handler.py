@@ -12,7 +12,7 @@ import cv2
 from diffusers import LTXPipeline, LTXImageToVideoPipeline
 import runpod
 
-print("جاري تحميل نماذج LTX-Video بكفاءة عالية (مشاركة الأوزان)...")
+print("جاري تحميل نماذج LTX-Video مع تفعيل إدارة الذاكرة الذكية (CPU Offload)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -23,24 +23,24 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل النماذج عند الإقلاع (بدون استهلاك ضعف الذاكرة)
+# تحميل النماذج عند الإقلاع وتفريغ الـ VRAM تلقائياً
 # -------------------------
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    # 1. تحميل النموذج الأساسي الأول (Text-to-Video)
+    # 1. تحميل النموذج الأساسي وتفعيل Offload لمنع OOM
     t2v_pipeline = LTXPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    t2v_pipeline.to("cuda")
+    t2v_pipeline.enable_model_cpu_offload()
 
-    # 2. اشتقاق بايبلاين الصورة منه مباشرة (من نفس الذاكرة وبدون استهلاك VRAM إضافي)
+    # 2. اشتقاق بايبلاين الصورة وتفعيل الـ Offload له أيضاً
     i2v_pipeline = LTXImageToVideoPipeline.from_pipe(t2v_pipeline)
-    i2v_pipeline.to("cuda")
+    i2v_pipeline.enable_model_cpu_offload()
     
-    print("✅ تم تحميل ونشر نماذج LTX بنجاح وبأعلى كفاءة للذاكرة!")
+    print("✅ تم تحميل ونشر نماذج LTX بنجاح وبأمان كامل للذاكرة!")
     MODEL_READY = True
 
 except Exception as e:
