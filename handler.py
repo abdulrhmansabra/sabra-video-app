@@ -12,23 +12,23 @@ import cv2
 from diffusers import LTXPipeline, LTXImageToVideoPipeline
 import runpod
 
-print("جاري تحميل نماذج LTX-Video (Text-to-Video & Image-to-Video)...")
+print("جاري تحميل نماذج LTX-Video بكفاءة عالية (مشاركة الأوزان)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
 def _token_kwargs():
     return {"token": HF_TOKEN} if HF_TOKEN else {}
 
-# قفل تزامني لتجنب التداخل
+# قفل تزامني لتجنب تداخل الطلبات
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل النماذج عند الإقلاع
+# تحميل النماذج عند الإقلاع (بدون استهلاك ضعف الذاكرة)
 # -------------------------
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    # 1. بايبلاين التوليد من النص فقط (Text-to-Video)
+    # 1. تحميل النموذج الأساسي الأول (Text-to-Video)
     t2v_pipeline = LTXPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
@@ -36,15 +36,11 @@ try:
     )
     t2v_pipeline.to("cuda")
 
-    # 2. بايبلاين التوليد من الصورة والنص (Image-to-Video)
-    i2v_pipeline = LTXImageToVideoPipeline.from_pretrained(
-        MODEL_ID, 
-        torch_dtype=torch.bfloat16,
-        **_token_kwargs()
-    )
+    # 2. اشتقاق بايبلاين الصورة منه مباشرة (من نفس الذاكرة وبدون استهلاك VRAM إضافي)
+    i2v_pipeline = LTXImageToVideoPipeline.from_pipe(t2v_pipeline)
     i2v_pipeline.to("cuda")
     
-    print("✅ تم تحميل نماذج LTX بنجاح وجاهزة للعمل بالكامل!")
+    print("✅ تم تحميل ونشر نماذج LTX بنجاح وبأعلى كفاءة للذاكرة!")
     MODEL_READY = True
 
 except Exception as e:
@@ -56,7 +52,7 @@ except Exception as e:
 
 
 # -------------------------
-# معالجة وتصدير الإطارات
+# دوال معالجة وتصدير الإطارات
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"): x = x.detach()
@@ -136,7 +132,7 @@ def load_image_from_input(img_input: str):
 # -------------------------
 def handler(event):
     if not MODEL_READY or t2v_pipeline is None or i2v_pipeline is None:
-        return {"status": "error", "message": "النماذج غير محملة."}
+        return {"status": "error", "message": "النماذج غير محملة أو فشل إقلاع السيرفر."}
 
     try:
         job_input = event.get("input") or {}
@@ -167,15 +163,15 @@ def handler(event):
             "width": width,
         }
 
-        # الاختيار الذكي للبايبلاين بناءً على وجود الصورة
+        # التوجيه الذكي التلقائي بناءً على إرسال المستخدم للصورة أم لا
         if pil_img is not None:
             pil_img = pil_img.resize((width, height))
             pipeline_kwargs["image"] = pil_img
             active_pipeline = i2v_pipeline
-            print(f"🚀 بدء توليد LTX Image-to-Video: {width}x{height}")
+            print(f"🚀 بدء معالجة Image-to-Video: {width}x{height}")
         else:
             active_pipeline = t2v_pipeline
-            print(f"🚀 بدء توليد LTX Text-to-Video من الصفر: {width}x{height}")
+            print(f"🚀 بدء توليد Text-to-Video من الصفر: {width}x{height}")
 
         with pipeline_lock:
             output_result = active_pipeline(**pipeline_kwargs).frames
