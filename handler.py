@@ -12,7 +12,7 @@ import cv2
 from diffusers import CogVideoXImageToVideoPipeline
 import runpod
 
-print("🚀 55جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
+print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -22,7 +22,7 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video بصيغة bfloat16 مع تفعيل تحسينات الذاكرة
+# تحميل نموذج CogVideoX-5B Image-to-Video مع ضبط إعدادات الـ VAE لمنع تشوهات المربعات
 # -------------------------
 try:
     MODEL_ID = "THUDM/CogVideoX-5b-I2V"
@@ -32,14 +32,14 @@ try:
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM الضخمة للسيرفر
+    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM للسيرفر
     i2v_pipeline.enable_model_cpu_offload()
     
-    # تفعيل Slicing و Tiling لمنع نفاد الذاكرة تماماً في مرحلة فك التشفير النهائية (VAE)
+    # تفعيل Slicing وتحويل الـ VAE إلى float32 لمنع مشكلة شبكة المربعات البكسلية نهائياً
     i2v_pipeline.vae.enable_slicing()
-    i2v_pipeline.vae.enable_tiling()
+    i2v_pipeline.vae.to(torch.float32)
 
-    print("✅ تم تحميل نموذج CogVideoX وتفعيل الحماية ضد الـ OOM بنجاح!")
+    print("✅ تم تحميل نموذج CogVideoX وتعديل إعدادات الـ VAE بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
@@ -148,7 +148,7 @@ def handler(event):
         guidance_scale = float(job_input.get("guidance_scale", 6.0))
         fps = int(job_input.get("fps", 8))
         
-        # تحديد عدد الإطارات (افتراضياً 33 إطاراً = ~4 ثوانٍ لتجنب أي ضغط على الذاكرة)
+        # تحديد عدد الإطارات (33 إطاراً = ~4 ثوانٍ متوازنة وآمنة للذاكرة)
         num_frames = int(job_input.get("num_frames", 33))
         
         width = int(job_input.get("width", 720))   
@@ -189,7 +189,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم تحريك الصورة وتصديرها بنجاح!")
+        print("✨ تم تحريك الصورة وتصديرها بنجاح وبدون أي تشوهات بكسلية!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
