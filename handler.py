@@ -12,7 +12,7 @@ import cv2
 from diffusers import WanImageToVideoPipeline
 import runpod
 
-print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور Wan2.1-I2V-14B (FP8)...")
+print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور Wan2.1-I2V-14B...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -22,16 +22,17 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج الصورة فقط
+# تحميل النموذج باستخدام bfloat16 و CPU Offload (متوافق تماماً مع 24GB VRAM)
 # -------------------------
 try:
     I2V_MODEL_ID = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
     
     i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
         I2V_MODEL_ID,
-        torch_dtype=torch.float8_e4m3fn,  # ضغط FP8 لتوفير VRAM
+        torch_dtype=torch.bfloat16,  # التوافق الكامل مع النموذج الرسمي
         **_token_kwargs()
     )
+    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM الضخمة للسيرفر
     i2v_pipeline.enable_model_cpu_offload()
 
     print("✅ تم تحميل نموذج تحريك الصور بنجاح!")
