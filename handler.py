@@ -9,10 +9,10 @@ import traceback
 import threading
 import cv2
 
-from diffusers import LTXImageToVideoPipeline
+from diffusers import LTXPipeline, LTXImageToVideoPipeline
 import runpod
 
-print("جاري تحميل نموذج LTX-Video (Image-to-Video & Text-to-Video Pipeline)...")
+print("جاري تحميل نماذج LTX-Video (Text-to-Video & Image-to-Video)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -23,26 +23,36 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل النموذج عند الإقلاع
+# تحميل النماذج عند الإقلاع
 # -------------------------
 try:
     MODEL_ID = "Lightricks/LTX-Video"
 
-    pipeline = LTXImageToVideoPipeline.from_pretrained(
+    # 1. بايبلاين التوليد من النص فقط (Text-to-Video)
+    t2v_pipeline = LTXPipeline.from_pretrained(
         MODEL_ID, 
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
+    t2v_pipeline.to("cuda")
+
+    # 2. بايبلاين التوليد من الصورة والنص (Image-to-Video)
+    i2v_pipeline = LTXImageToVideoPipeline.from_pretrained(
+        MODEL_ID, 
+        torch_dtype=torch.bfloat16,
+        **_token_kwargs()
+    )
+    i2v_pipeline.to("cuda")
     
-    pipeline.to("cuda")
-    print("✅ تم تحميل نموذج LTX-Video بنجاح وجاهز للعمل!")
+    print("✅ تم تحميل نماذج LTX بنجاح وجاهزة للعمل بالكامل!")
     MODEL_READY = True
 
 except Exception as e:
-    print("❌ فشل تحميل النموذج:")
+    print("❌ فشل تحميل النماذج:")
     traceback.print_exc()
     MODEL_READY = False
-    pipeline = None
+    t2v_pipeline = None
+    i2v_pipeline = None
 
 
 # -------------------------
@@ -69,7 +79,6 @@ def normalize_frame(frame):
     return frame
 
 def normalize_video_frames(video_frames):
-    # معالجة آمنة تماماً لو كانت النتيجة قائمة (List) أو تينسور
     if isinstance(video_frames, list):
         out = []
         for fr in video_frames:
@@ -99,7 +108,7 @@ def export_video_with_opencv(frames, output_path, fps=16):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     for frame in frames:
-        out.write(frame[..., ::-1]) # تصحيح الألوان نهائياً
+        out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     out.release()
 
 def load_image_from_input(img_input: str):
@@ -118,7 +127,7 @@ def load_image_from_input(img_input: str):
             data = base64.b64decode(img_input)
             return Image.open(BytesIO(data)).convert("RGB")
     except Exception as e:
-        print(f"خطأ في قراءة الصورة: {e}")
+        print(f"خطأ في قراءة الصورة: الخروج بدون صورة. التفاصيل: {e}")
         return None
 
 
@@ -126,8 +135,8 @@ def load_image_from_input(img_input: str):
 # RunPod Handler الأساسي
 # -------------------------
 def handler(event):
-    if not MODEL_READY or pipeline is None:
-        return {"status": "error", "message": "النموذج غير محمل."}
+    if not MODEL_READY or t2v_pipeline is None or i2v_pipeline is None:
+        return {"status": "error", "message": "النماذج غير محملة."}
 
     try:
         job_input = event.get("input") or {}
@@ -135,15 +144,11 @@ def handler(event):
         prompt = job_input.get("prompt")
         negative_prompt = job_input.get("negative_prompt", "blurry, distorted face, low quality, static, bad anatomy")
         
-        # التقاط الصورة (اختياري: يدعم النص والصورة معاً)
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
 
         if not prompt or not prompt.strip():
-            if pil_img is not None:
-                prompt = "Cinematic motion, smooth camera movement, high quality"
-            else:
-                return {"status": "error", "message": "يجب إرسال prompt أو image على الأقل."}
+            return {"status": "error", "message": "يجب إرسال prompt على الأقل."}
 
         num_inference_steps = int(job_input.get("num_inference_steps", 30))
         guidance_scale = float(job_input.get("guidance_scale", 7.5))
@@ -162,15 +167,18 @@ def handler(event):
             "width": width,
         }
 
+        # الاختيار الذكي للبايبلاين بناءً على وجود الصورة
         if pil_img is not None:
             pil_img = pil_img.resize((width, height))
             pipeline_kwargs["image"] = pil_img
-            print(f"🚀 بدء توليد LTX Image-to-Video مع تثبيت الملامح: {width}x{height}")
+            active_pipeline = i2v_pipeline
+            print(f"🚀 بدء توليد LTX Image-to-Video: {width}x{height}")
         else:
-            print(f"🚀 بدء توليد LTX Text-to-Video: {width}x{height}")
+            active_pipeline = t2v_pipeline
+            print(f"🚀 بدء توليد LTX Text-to-Video من الصفر: {width}x{height}")
 
         with pipeline_lock:
-            output_result = pipeline(**pipeline_kwargs).frames
+            output_result = active_pipeline(**pipeline_kwargs).frames
 
         torch.cuda.empty_cache()
 
@@ -192,7 +200,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم توليد وتصدير الفيديو بنجاح بواسطة LTX-Video!")
+        print("✨ تم توليد وتصدير الفيديو بنجاح!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
