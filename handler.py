@@ -9,10 +9,10 @@ import traceback
 import threading
 import cv2
 
-from diffusers import WanImageToVideoPipeline
+from diffusers import CogVideoXImageToVideoPipeline
 import runpod
 
-print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور Wan2.1-I2V-14B...")
+print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -22,20 +22,20 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل النموذج باستخدام bfloat16 و CPU Offload (متوافق تماماً مع 24GB VRAM)
+# تحميل نموذج CogVideoX-5B Image-to-Video بصيغة bfloat16
 # -------------------------
 try:
-    I2V_MODEL_ID = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+    MODEL_ID = "THUDM/CogVideoX-5b-I2V"
     
-    i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
-        I2V_MODEL_ID,
-        torch_dtype=torch.bfloat16,  # التوافق الكامل مع النموذج الرسمي
+    i2v_pipeline = CogVideoXImageToVideoPipeline.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM الضخمة للسيرفر
+    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM لتجنب امتلاء الـ 24GB
     i2v_pipeline.enable_model_cpu_offload()
 
-    print("✅ تم تحميل نموذج تحريك الصور بنجاح!")
+    print("✅ تم تحميل نموذج CogVideoX بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
@@ -89,7 +89,7 @@ def normalize_video_frames(video_frames):
             print(f"⚠️ تحذير في الإطار {i}: {e}")
     return out
 
-def export_video_with_opencv(frames, output_path, fps=16):
+def export_video_with_opencv(frames, output_path, fps=8):
     if not frames: raise ValueError("الإطارات فارغة.")
     height, width, _ = frames[0].shape
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -129,7 +129,7 @@ def handler(event):
         job_input = event.get("input") or {}
         
         prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, bad motion, static")
+        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, bad motion")
         
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
@@ -140,15 +140,16 @@ def handler(event):
         if not prompt or not prompt.strip():
             return {"status": "error", "message": "يلزم إرسال وصف الحركة (prompt) مع الصورة."}
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 30))
-        guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        fps = int(job_input.get("fps", 16))
+        num_inference_steps = int(job_input.get("num_inference_steps", 35))
+        guidance_scale = float(job_input.get("guidance_scale", 6.0))
+        fps = int(job_input.get("fps", 8))
         
-        width = int(job_input.get("width", 832))   
+        # أبعاد افتراضية تناسب CogVideoX
+        width = int(job_input.get("width", 720))   
         height = int(job_input.get("height", 480))
 
         pil_img = pil_img.resize((width, height))
-        print(f"🎬 جاري تحريك الصورة باستخدام Wan2.1 لدقة {width}x{height}...")
+        print(f"🎬 جاري تحريك الصورة باستخدام CogVideoX لدقة {width}x{height}...")
 
         with pipeline_lock:
             output_result = i2v_pipeline(
@@ -172,7 +173,7 @@ def handler(event):
         if not video_frames:
             return {"status": "error", "message": "فشل تحويل إطارات الفيديو."}
 
-        video_path = "/tmp/output_wan_i2v.mp4"
+        video_path = "/tmp/output_cogvideo_i2v.mp4"
         export_video_with_opencv(video_frames, video_path, fps=fps)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
@@ -181,7 +182,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم تحريك الصورة بنجاح!")
+        print("✨ تم تحريك الصورة بنجاح باستخدام CogVideoX!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
