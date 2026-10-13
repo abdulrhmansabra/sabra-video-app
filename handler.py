@@ -12,7 +12,7 @@ import cv2
 from diffusers import CogVideoXImageToVideoPipeline
 import runpod
 
-print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
+print("🚀 55جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -22,7 +22,7 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video بصيغة bfloat16
+# تحميل نموذج CogVideoX-5B Image-to-Video بصيغة bfloat16 مع تفعيل تحسينات الذاكرة
 # -------------------------
 try:
     MODEL_ID = "THUDM/CogVideoX-5b-I2V"
@@ -32,10 +32,14 @@ try:
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM لتجنب امتلاء الـ 24GB
+    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM الضخمة للسيرفر
     i2v_pipeline.enable_model_cpu_offload()
+    
+    # تفعيل Slicing و Tiling لمنع نفاد الذاكرة تماماً في مرحلة فك التشفير النهائية (VAE)
+    i2v_pipeline.vae.enable_slicing()
+    i2v_pipeline.vae.enable_tiling()
 
-    print("✅ تم تحميل نموذج CogVideoX بنجاح!")
+    print("✅ تم تحميل نموذج CogVideoX وتفعيل الحماية ضد الـ OOM بنجاح!")
     MODEL_READY = True
 
 except Exception as e:
@@ -144,12 +148,14 @@ def handler(event):
         guidance_scale = float(job_input.get("guidance_scale", 6.0))
         fps = int(job_input.get("fps", 8))
         
-        # أبعاد افتراضية تناسب CogVideoX
+        # تحديد عدد الإطارات (افتراضياً 33 إطاراً = ~4 ثوانٍ لتجنب أي ضغط على الذاكرة)
+        num_frames = int(job_input.get("num_frames", 33))
+        
         width = int(job_input.get("width", 720))   
         height = int(job_input.get("height", 480))
 
         pil_img = pil_img.resize((width, height))
-        print(f"🎬 جاري تحريك الصورة باستخدام CogVideoX لدقة {width}x{height}...")
+        print(f"🎬 جاري تحريك الصورة بدقة {width}x{height} ولمدة {num_frames} إطاراً...")
 
         with pipeline_lock:
             output_result = i2v_pipeline(
@@ -160,6 +166,7 @@ def handler(event):
                 guidance_scale=guidance_scale,
                 height=height,
                 width=width,
+                num_frames=num_frames,
             ).frames
 
         torch.cuda.empty_cache()
@@ -182,7 +189,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم تحريك الصورة بنجاح باستخدام CogVideoX!")
+        print("✨ تم تحريك الصورة وتصديرها بنجاح!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
@@ -193,4 +200,3 @@ def handler(event):
 
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})
-
