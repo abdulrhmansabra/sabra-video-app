@@ -8,12 +8,11 @@ import base64
 import traceback
 import threading
 import cv2
-import types
 
 from diffusers import CogVideoXImageToVideoPipeline
 import runpod
 
-print("🚀9 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
+print("🚀8 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -23,7 +22,7 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video مع الحل الجذري للتشوهات والأنواع
+# تحميل نموذج CogVideoX-5B Image-to-Video بالطريقة السليمة والنظيفة
 # -------------------------
 try:
     MODEL_ID = "THUDM/CogVideoX-5b-I2V"
@@ -33,22 +32,13 @@ try:
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    # توزيع الحمل بسلاسة بين الـ VRAM والـ RAM
+    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM
     i2v_pipeline.enable_model_cpu_offload()
+    
+    # تفعيل Slicing فقط لمنع الـ OOM بدون أي مشاكل في الأنواع أو تشوهات بكسلية
     i2v_pipeline.vae.enable_slicing()
-    
-    # 1. تحويل الـ VAE إلى float32 للقضاء نهائياً على تشوهات المربعات والشبكات اللونية
-    i2v_pipeline.vae.to(torch.float32)
-    
-    # 2. إضافة Wrapper ذكي لمنع أي خطأ في تطابق الأنواع (Type Mismatch) تلقائياً
-    old_decode = i2v_pipeline.vae.decode
-    def new_decode(self, *args, **kwargs):
-        args = tuple(arg.to(torch.float32) if isinstance(arg, torch.Tensor) else arg for arg in args)
-        kwargs = {k: (v.to(torch.float32) if isinstance(v, torch.Tensor) else v) for k, v in kwargs.items()}
-        return old_decode(*args, **kwargs)
-    i2v_pipeline.vae.decode = types.MethodType(new_decode, i2v_pipeline.vae)
 
-    print("✅ تم تحميل النموذج وتثبيت درع الحماية ضد التشوهات بنجاح!")
+    print("✅ تم تحميل النموذج وإعداد الحماية بشكل نظيف وبدون أخطاء!")
     MODEL_READY = True
 
 except Exception as e:
@@ -196,7 +186,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم إنتاج الفيديو بنجاح وصافٍ تماماً!")
+        print("✨ تم إنتاج وتصدير الفيديو بنجاح تام وبدون أخطاء!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
