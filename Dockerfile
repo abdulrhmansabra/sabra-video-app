@@ -3,7 +3,7 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# تثبيت الحزم الأساسية ومكتبات النظام لـ FFmpeg والمعالجة
+# تثبيت الحزم الأساسية ومكتبات النظام
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget ca-certificates \
     libgl1-mesa-glx libglib2.0-0 ffmpeg \
@@ -14,9 +14,13 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت diffusers من المصدر لضمان دعم Wan2.2 مع بقية الحزم المطلوبة
+# تثبيت أحدث نسخة من diffusers حصرياً من الـ main branch بدون كاش
+RUN pip3 install --no-cache-dir --force-reinstall \
+    git+https://github.com/huggingface/diffusers.git
+
+# تثبيت باقي الحزم المطلوبة
 RUN pip3 install --no-cache-dir \
-    runpod accelerate transformers git+https://github.com/huggingface/diffusers.git safetensors huggingface_hub \
+    runpod accelerate transformers safetensors huggingface_hub \
     numpy pillow opencv-python-headless requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
 
 ENV PYTHONUNBUFFERED=1
