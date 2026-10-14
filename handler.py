@@ -15,7 +15,7 @@ import cv2
 from diffusers import WanPipeline, WanImageToVideoPipeline
 import runpod
 
-print("🚀 99جاري تهيئة وتحميل نموذج Wan2.2-TI2V-5B...")
+print("🚀 جاري إعداد بيئة عمل نماذج Wan2.2 على RunPod...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -25,22 +25,34 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
-# تحميل البايپلاين المزدوج (يدعم النص والصورة)
-try:
-    print("📦 جاري تحميل WanImageToVideoPipeline...")
-    pipeline = WanImageToVideoPipeline.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        **_token_kwargs()
-    )
-    pipeline.enable_model_cpu_offload()
-    print("✅ تم تحميل النموذج وتفعيل حماية الذاكرة بنجاح!")
-    MODEL_READY = True
-except Exception as e:
-    print("❌ فشل تحميل النموذج الأساسي:")
-    traceback.print_exc()
-    MODEL_READY = False
-    pipeline = None
+# متغيرات عامة لإدارة الذاكرة والـ Pipelines بذكاء
+t2v_pipeline = None
+i2v_pipeline = None
+
+def get_pipeline(is_image_to_video=False):
+    global t2v_pipeline, i2v_pipeline
+    if is_image_to_video:
+        if i2v_pipeline is None:
+            print("📦 جاري تحميل WanImageToVideoPipeline (صورة + نص)...")
+            if t2v_pipeline is not None:
+                del t2v_pipeline
+                torch.cuda.empty_cache()
+            i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
+                MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
+            )
+            i2v_pipeline.enable_model_cpu_offload()
+        return i2v_pipeline, "i2v"
+    else:
+        if t2v_pipeline is None:
+            print("📦 جاري تحميل WanPipeline (نص فقط)...")
+            if i2v_pipeline is not None:
+                del i2v_pipeline
+                torch.cuda.empty_cache()
+            t2v_pipeline = WanPipeline.from_pretrained(
+                MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
+            )
+            t2v_pipeline.enable_model_cpu_offload()
+        return t2v_pipeline, "t2v"
 
 
 def to_numpy(x):
@@ -123,9 +135,6 @@ def load_image_from_input(img_input: str):
         return None
 
 def handler(event):
-    if not MODEL_READY:
-        return {"status": "error", "message": "النموذج غير محمل."}
-
     try:
         job_input = event.get("input") or {}
         prompt = job_input.get("prompt")
@@ -147,25 +156,39 @@ def handler(event):
         if pil_img is not None:
             pil_img = pil_img.resize((width, height))
 
-        print(f"🎬 بدء المعالجة عبر Wan2.2 ({width}x{height}, {num_frames} إطار)...")
+        # تحديد ما إذا كان الطلب يتطلب صورة أم نصاً فقط
+        is_i2v = pil_img is not None
+        print(f"🎬 نوع العملية: {'Image-to-Video' if is_i2v else 'Text-to-Video'} ({width}x{height}, {num_frames} إطار)...")
 
         with pipeline_lock:
-            # استدعاء صحيح بالوسيط image المخصص لكلاس WanImageToVideoPipeline
-            output_result = pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image=pil_img,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-            ).frames
+            pipe, p_type = get_pipeline(is_image_to_video=is_i2v)
+            
+            if p_type == "i2v":
+                output_result = pipe(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    image=pil_img,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                ).frames
+            else:
+                output_result = pipe(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                ).frames
 
         torch.cuda.empty_cache()
 
         if output_result is None:
-            return {"status": "error", "message": "لم يُرجع النموذج إطارات."}
+            return {"status": "error", "message": "لم يُرجع النموذج أية إطارات."}
 
         output = output_result[0] if isinstance(output_result, (list, tuple)) else output_result
         video_frames = process_video_frames(output)
