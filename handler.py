@@ -13,10 +13,10 @@ import threading
 import subprocess
 import cv2
 
-from diffusers import CogVideoXImageToVideoPipeline
+from diffusers import DiffusionPipeline
 import runpod
 
-print("🚀 جاري تهيئة وتحميل نموذج تحريك الصور CogVideoX-5B-I2V بمعايير الجودة العالمية...")
+print("🚀 جاري تهيئة وتحميل نموذج Wan2.2-TI2V-5B بمعمارية مطابقة التدفق (Flow Matching)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -26,34 +26,32 @@ def _token_kwargs():
 pipeline_lock = threading.Lock()
 
 # -------------------------
-# تحميل نموذج CogVideoX-5B Image-to-Video
+# تحميل نموذج Wan2.2-TI2V-5B-Diffusers
 # -------------------------
 try:
-    MODEL_ID = "THUDM/CogVideoX-5b-I2V"
+    MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     
-    i2v_pipeline = CogVideoXImageToVideoPipeline.from_pretrained(
+    pipeline = DiffusionPipeline.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
         **_token_kwargs()
     )
-    # توزيع الحمل بذكاء بين الـ VRAM والـ RAM
-    i2v_pipeline.enable_model_cpu_offload()
     
-    # تفعيل Slicing للحماية من استهلاك الذاكرة المفرط
-    i2v_pipeline.vae.enable_slicing()
+    # توزيع الأعباء بذكاء ليتوافق تماماً مع كرت A5000 (24GB VRAM)
+    pipeline.enable_model_cpu_offload()
 
-    print("✅ تم تحميل النموذج وتفعيل أدوات الحماية بنجاح!")
+    print("✅ تم تحميل نموذج Wan2.2 بنجاح وتفعيل آليات حماية الذاكرة!")
     MODEL_READY = True
 
 except Exception as e:
     print("❌ فشل تحميل النموذج:")
     traceback.print_exc()
     MODEL_READY = False
-    i2v_pipeline = None
+    pipeline = None
 
 
 # -------------------------
-# المعالجة العلمية المتقدمة للإطارات (إزالة الشبكة والحفاظ على الألوان)
+# المعالجة العلمية المتقدمة للإطارات
 # -------------------------
 def to_numpy(x):
     if hasattr(x, "detach"): x = x.detach()
@@ -70,21 +68,18 @@ def enhance_and_normalize_frame(frame):
     if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
         frame = np.transpose(frame, (1, 2, 0))
     
-    # ضبط النطاق اللوني بدقة تامة (0 إلى 255)
     if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
         frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
     else:
         frame = frame.clip(0, 255).astype(np.uint8)
     
-    # 🌟 المعالجة العلمية المتقدمة لكل إطار (Non-Local Means Denoising)
-    # تقضي نهائياً على عيوب الشبكة والمربعات (Checkerboard/Grid Artifacts) الناتجة عن الـ VAE
-    # مع الحفاظ على حِدّة التفاصيل، الملامح الدقيقة، والألوان الأصلية بدون أي بهتان.
+    # تصفية علمية متقدمة لكل إطار لضمان صفاء البكسلات والألوان الطبيعية
     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     denoised_bgr = cv2.fastNlMeansDenoisingColored(
         frame_bgr, 
         None, 
-        h=3,            # قوة إزالة التشوه الشبكي (قيمة متوازنة تمنع التنعيم المفرط)
-        hColor=3,       # حماية التدرجات اللونية الطبيعية للبشرة والعناصر
+        h=3, 
+        hColor=3, 
         templateWindowSize=7, 
         searchWindowSize=21
     )
@@ -115,9 +110,9 @@ def process_video_frames(video_frames):
 
 
 # -------------------------
-# تصدير الفيديو باحترافية عبر FFmpeg + Subprocess (Piping)
+# تصدير الفيديو عبر FFmpeg + Subprocess (Piping)
 # -------------------------
-def export_video_with_ffmpeg(frames, output_path, fps=8):
+def export_video_with_ffmpeg(frames, output_path, fps=24):
     if not frames: raise ValueError("الإطارات فارغة.")
     height, width, _ = frames[0].shape
 
@@ -129,10 +124,10 @@ def export_video_with_ffmpeg(frames, output_path, fps=8):
         '-s', f'{width}x{height}',
         '-pix_fmt', 'rgb24',
         '-r', str(fps),
-        '-i', '-',          # استقبال البيانات مباشرة من الـ RAM (Pipe)
-        '-c:v', 'libx264',  # الترميز القياسي العالمي الأكثر توافقاً
-        '-pix_fmt', 'yuv420p', # توافقية مطلقة مع كافة المتصفحات والهواتف
-        '-crf', '23',       # الجودة السينمائية المثالية المضغوطة
+        '-i', '-',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-crf', '23',
         output_path
     ]
 
@@ -182,33 +177,34 @@ def handler(event):
         job_input = event.get("input") or {}
         
         prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, bad motion, checkerboard, grid artifacts")
+        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, bad motion")
         
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
 
-        if pil_img is None:
-            return {"status": "error", "message": "يلزم إرسال صورة (image) لتشغيل نموذج التحريك."}
-
         if not prompt or not prompt.strip():
-            return {"status": "error", "message": "يلزم إرسال وصف الحركة (prompt) مع الصورة."}
+            return {"status": "error", "message": "يلزم إرسال وصف الحركة (prompt)."}
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 35))
-        guidance_scale = float(job_input.get("guidance_scale", 6.0))
-        fps = int(job_input.get("fps", 8))
+        num_inference_steps = int(job_input.get("num_inference_steps", 30))
+        guidance_scale = float(job_input.get("guidance_scale", 5.0))
+        fps = int(job_input.get("fps", 24))
+        num_frames = int(job_input.get("num_frames", 33))
         
-        num_frames = int(job_input.get("num_frames", 25))
-        width = 720   
-        height = 480
+        # أبعاد تناسب كرت A5000 بدقة عالية
+        width = int(job_input.get("width", 832))
+        height = int(job_input.get("height", 480))
 
-        pil_img = pil_img.resize((width, height))
-        print(f"🎬 جاري توليد ومعالجة الفيديو بالمعايير العالمية ({width}x{height}, {num_frames} إطار)...")
+        if pil_img is not None:
+            pil_img = pil_img.resize((width, height))
+
+        print(f"🎬 جاري توليد ومعالجة الفيديو عبر Wan2.2 ({width}x{height}, {num_frames} إطار)...")
 
         with pipeline_lock:
-            output_result = i2v_pipeline(
+            # تشغيل النموذج بوضع المراسلة الموحد (TI2V: Text + Image)
+            output_result = pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
-                image=pil_img,
+                image=pil_img if pil_img is not None else None,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 height=height,
@@ -223,15 +219,15 @@ def handler(event):
 
         output = output_result[0] if isinstance(output_result, (list, tuple)) else output_result
         
-        # 🌟 تطبيق المعالجة المتقدمة لكل إطار لمسح الشبكة تماماً
+        # تصفية الإطارات عبر OpenCV
         video_frames = process_video_frames(output)
 
         if not video_frames:
             return {"status": "error", "message": "فشل معالجة إطارات الفيديو."}
 
-        video_path = "/tmp/output_cogvideo_i2v.mp4"
+        video_path = "/tmp/output_wan22_ti2v.mp4"
         
-        # 🌟 ضغط وتصدير الفيديو فوراً عبر FFmpeg والـ Subprocess Pipe
+        # ضغط وتصدير الفيديو فوراً عبر FFmpeg Pipe
         export_video_with_ffmpeg(video_frames, video_path, fps=fps)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
@@ -240,7 +236,7 @@ def handler(event):
         with open(video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تم إخراج الفيديو باحترافية مطلقة وخلو ت تام من الشبكة وبألوان خلابة!")
+        print("✨ تم إخراج الفيديو باحترافية مطلقة وبألوان مذهلة عبر Wan2.2!")
         return {"status": "success", "video_base64": video_base64}
 
     except Exception as e:
