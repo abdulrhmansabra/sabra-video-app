@@ -15,7 +15,7 @@ import cv2
 from diffusers import WanPipeline, WanImageToVideoPipeline
 import runpod
 
-print("🚀 جاري تهيئة وتحميل نموذج Wan2.2-TI2V-5B...")
+print("🚀 99جاري تهيئة وتحميل نموذج Wan2.2-TI2V-5B...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
