@@ -15,7 +15,7 @@ import cv2
 from diffusers import WanPipeline, WanImageToVideoPipeline
 import runpod
 
-print("🚀 جاري إعداد بيئة عمل نماذج Wan2.2 على RunPod...")
+print("🚀 جاري إعداد بيئة عمل نماذج Wan2.2 على RunPod (الوضع السريع - GPU الكامل)...")
 
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -33,25 +33,27 @@ def get_pipeline(is_image_to_video=False):
     global t2v_pipeline, i2v_pipeline
     if is_image_to_video:
         if i2v_pipeline is None:
-            print("📦 جاري تحميل WanImageToVideoPipeline (صورة + نص)...")
+            print("📦 جاري تحميل وتثبيت WanImageToVideoPipeline مباشرة على الـ GPU...")
             if t2v_pipeline is not None:
                 del t2v_pipeline
                 torch.cuda.empty_cache()
+            
             i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
                 MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
-            )
-            i2v_pipeline.enable_model_cpu_offload()
+            ).to("cuda")
+            
         return i2v_pipeline, "i2v"
     else:
         if t2v_pipeline is None:
-            print("📦 جاري تحميل WanPipeline (نص فقط)...")
+            print("📦 جاري تحميل وتثبيت WanPipeline مباشرة على الـ GPU...")
             if i2v_pipeline is not None:
                 del i2v_pipeline
                 torch.cuda.empty_cache()
+                
             t2v_pipeline = WanPipeline.from_pretrained(
                 MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
-            )
-            t2v_pipeline.enable_model_cpu_offload()
+            ).to("cuda")
+            
         return t2v_pipeline, "t2v"
 
 
@@ -138,7 +140,7 @@ def handler(event):
     try:
         job_input = event.get("input") or {}
         prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted")
+        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted, static, frozen, melting")
         
         image_input = job_input.get("image_reference") or job_input.get("image")
         pil_img = load_image_from_input(image_input)
@@ -147,16 +149,16 @@ def handler(event):
             return {"status": "error", "message": "يلزم إرسال الوصف (prompt)."}
 
         num_inference_steps = int(job_input.get("num_inference_steps", 30))
-        guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        fps = int(job_input.get("fps", 24))
-        num_frames = int(job_input.get("num_frames", 25))
-        width = int(job_input.get("width", 720))
-        height = int(job_input.get("height", 480))
+        guidance_scale = float(job_input.get("guidance_scale", 6.0))
+        fps = int(job_input.get("fps", 16))
+        num_frames = int(job_input.get("num_frames", 65))
+        width = int(job_input.get("width", 640))
+        height = int(job_input.get("height", 352))
 
         if pil_img is not None:
-            pil_img = pil_img.resize((width, height))
+            # استخدام LANCZOS لمعالجة دقيقة تناسب VAE
+            pil_img = pil_img.resize((width, height), Image.Resampling.LANCZOS)
 
-        # تحديد ما إذا كان الطلب يتطلب صورة أم نصاً فقط
         is_i2v = pil_img is not None
         print(f"🎬 نوع العملية: {'Image-to-Video' if is_i2v else 'Text-to-Video'} ({width}x{height}, {num_frames} إطار)...")
 
