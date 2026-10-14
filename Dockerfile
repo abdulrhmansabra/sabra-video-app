@@ -14,7 +14,7 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخة من diffusers والمكتبات المكملة مع ضمان وجود numpy و pillow وصيغة headless
+# تثبيت diffusers من المصدر لضمان دعم Wan2.2 مع بقية الحزم المطلوبة
 RUN pip3 install --no-cache-dir \
     runpod accelerate transformers git+https://github.com/huggingface/diffusers.git safetensors huggingface_hub \
     numpy pillow opencv-python-headless requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
