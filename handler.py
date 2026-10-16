@@ -3,210 +3,109 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import torch
 import numpy as np
-from PIL import Image
 import requests
 from io import BytesIO
 import base64
 import traceback
-import threading
+import sys
 import subprocess
-import cv2
-
-from diffusers import WanPipeline, WanImageToVideoPipeline
+import glob
 import runpod
 
-print("🚀 جاري إعداد بيئة عمل نماذج Wan2.2 على RunPod...")
+# إضافة مسار مستودع Moore-AnimateAnyone للاستيراد
+sys.path.append('/app/Moore-AnimateAnyone')
 
-HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
+print("🚀 جاري إعداد بيئة عمل Moore-AnimateAnyone على RunPod...")
 
-def _token_kwargs():
-    return {"token": HF_TOKEN} if HF_TOKEN else {}
-
-pipeline_lock = threading.Lock()
-MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
-
-# متغيرات عامة لإدارة الذاكرة والـ Pipelines بذكاء
-t2v_pipeline = None
-i2v_pipeline = None
-
-def get_pipeline(is_image_to_video=False):
-    global t2v_pipeline, i2v_pipeline
-    if is_image_to_video:
-        if i2v_pipeline is None:
-            print("📦 جاري تحميل WanImageToVideoPipeline (صورة + نص)...")
-            if t2v_pipeline is not None:
-                del t2v_pipeline
-                torch.cuda.empty_cache()
-            i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
-                MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
-            )
-            i2v_pipeline.enable_model_cpu_offload()
-        return i2v_pipeline, "i2v"
-    else:
-        if t2v_pipeline is None:
-            print("📦 جاري تحميل WanPipeline (نص فقط)...")
-            if i2v_pipeline is not None:
-                del i2v_pipeline
-                torch.cuda.empty_cache()
-            t2v_pipeline = WanPipeline.from_pretrained(
-                MODEL_ID, torch_dtype=torch.bfloat16, **_token_kwargs()
-            )
-            t2v_pipeline.enable_model_cpu_offload()
-        return t2v_pipeline, "t2v"
-
-
-def to_numpy(x):
-    if hasattr(x, "detach"): x = x.detach()
-    if hasattr(x, "cpu"): x = x.cpu()
-    if hasattr(x, "numpy"): x = x.numpy()
-    return x
-
-def enhance_and_normalize_frame(frame):
-    frame = to_numpy(frame)
-    frame = np.squeeze(np.asarray(frame))
-    if frame.ndim == 2: frame = frame[..., None]
-    while frame.ndim > 3: frame = frame[0]
-    if frame.ndim == 2: frame = frame[..., None]
-    if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
-        frame = np.transpose(frame, (1, 2, 0))
-    
-    if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
-        frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
-    else:
-        frame = frame.clip(0, 255).astype(np.uint8)
-    
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    denoised_bgr = cv2.fastNlMeansDenoisingColored(
-        frame_bgr, None, h=3, hColor=3, templateWindowSize=7, searchWindowSize=21
-    )
-    return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
-
-def process_video_frames(video_frames):
-    if isinstance(video_frames, list):
-        return [enhance_and_normalize_frame(fr) for fr in video_frames]
-    raw_frames = to_numpy(video_frames)
-    if not isinstance(raw_frames, np.ndarray):
-        raw_frames = np.asarray(raw_frames)
-    if raw_frames.ndim == 5: raw_frames = raw_frames[0]
-    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1: raw_frames = raw_frames[0]
-    
-    out = []
-    for i in range(raw_frames.shape[0]):
-        try:
-            out.append(enhance_and_normalize_frame(raw_frames[i]))
-        except Exception as e:
-            print(f"⚠️ تحذير في إطار {i}: {e}")
-    return out
-
-def export_video_with_ffmpeg(frames, output_path, fps=24):
-    if not frames: raise ValueError("الإطارات فارغة.")
-    height, width, _ = frames[0].shape
-    cmd = [
-        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-        '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
-        '-i', '-', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '23', output_path
-    ]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    for frame in frames:
-        if frame.dtype != np.uint8: frame = frame.astype(np.uint8)
-        process.stdin.write(frame.tobytes())
-    process.stdin.close()
-    process.wait()
-    if process.returncode != 0:
-        err = process.stderr.read().decode()
-        raise RuntimeError(f"فشل تصدير FFmpeg: {err}")
-
-def load_image_from_input(img_input: str):
-    if img_input is None: return None
-    if not isinstance(img_input, str): return None
-    img_input = img_input.strip()
-    if img_input == "": return None
+def download_file_from_input(input_data, output_path):
+    """تحميل الملف سواء كان رابط URL أو Base64 وحفظه محلياً"""
+    if not input_data:
+        return False
     try:
-        if img_input.startswith("http://") or img_input.startswith("https://"):
-            response = requests.get(img_input, timeout=30)
+        input_str = str(input_data).strip()
+        if input_str.startswith("http://") or input_str.startswith("https://"):
+            response = requests.get(input_str, timeout=60)
             response.raise_for_status()
-            return Image.open(BytesIO(response.content)).convert("RGB")
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+            return True
         else:
-            if "," in img_input: img_input = img_input.split(",", 1)[1]
-            data = base64.b64decode(img_input)
-            return Image.open(BytesIO(data)).convert("RGB")
+            if "," in input_str:
+                input_str = input_str.split(",", 1)[1]
+            data = base64.b64decode(input_str)
+            with open(output_path, "wb") as f:
+                f.write(data)
+            return True
     except Exception as e:
-        print(f"خطأ في قراءة الصورة: {e}")
-        return None
+        print(f"⚠️ خطأ في تحميل الملف إلى {output_path}: {e}")
+        return False
 
 def handler(event):
     try:
         job_input = event.get("input") or {}
-        prompt = job_input.get("prompt")
-        negative_prompt = job_input.get("negative_prompt", "blurry, low quality, distorted")
         
-        image_input = job_input.get("image_reference") or job_input.get("image")
-        pil_img = load_image_from_input(image_input)
+        # استقبال مدخلات AnimateAnyone (صورة الشخصية وفيديو الحركة المرجعي)
+        character_image_input = job_input.get("character_image") or job_input.get("image")
+        pose_video_input = job_input.get("pose_video") or job_input.get("video")
 
-        if not prompt or not prompt.strip():
-            return {"status": "error", "message": "يلزم إرسال الوصف (prompt)."}
+        if not character_image_input or not pose_video_input:
+            return {
+                "status": "error", 
+                "message": "يجب إرسال صورة الشخصية (character_image) وفيديو الحركة المرجعي (pose_video)."
+            }
 
-        num_inference_steps = int(job_input.get("num_inference_steps", 30))
-        guidance_scale = float(job_input.get("guidance_scale", 5.0))
-        fps = int(job_input.get("fps", 24))
-        num_frames = int(job_input.get("num_frames", 25))
-        width = int(job_input.get("width", 720))
-        height = int(job_input.get("height", 480))
+        # مسارات مؤقتة للملفات
+        local_image_path = "/tmp/character_image.png"
+        local_video_path = "/tmp/pose_video.mp4"
+        output_video_path = "/tmp/output_animation.mp4"
 
-        if pil_img is not None:
-            pil_img = pil_img.resize((width, height))
+        print("📥 جاري تجهيز وتحميل الملفات المدخلة...")
+        if not download_file_from_input(character_image_input, local_image_path):
+            return {"status": "error", "message": "فشل تحميل صورة الشخصية."}
+        
+        if not download_file_from_input(pose_video_input, local_video_path):
+            return {"status": "error", "message": "فشل تحميل الفيديو المرجعي."}
 
-        # تحديد ما إذا كان الطلب يتطلب صورة أم نصاً فقط
-        is_i2v = pil_img is not None
-        print(f"🎬 نوع العملية: {'Image-to-Video' if is_i2v else 'Text-to-Video'} ({width}x{height}, {num_frames} إطار)...")
+        print("🎬 جاري تنفيذ نموذج AnimateAnyone (Character & Pose Transfer)...")
+        
+        # استدعاء أمر التشغيل الخاص بالمستودع لنقل الحركة
+        inference_cmd = [
+            sys.executable, "/app/Moore-AnimateAnyone/inference.py",
+            "--source_image", local_image_path,
+            "--driving_video", local_video_path,
+            "--output_dir", "/tmp"
+        ]
+        
+        result = subprocess.run(inference_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"❌ خطأ أثناء تنفيذ النمذجة: {result.stderr}")
+            return {"status": "error", "message": f"فشل عملية المعالجة: {result.stderr[-500:]}"}
 
-        with pipeline_lock:
-            pipe, p_type = get_pipeline(is_image_to_video=is_i2v)
-            
-            if p_type == "i2v":
-                output_result = pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    image=pil_img,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                ).frames
+        # البحث عن الفيديو الناتج في مجلد الإخراج المؤقت
+        if not os.path.exists(output_video_path):
+            output_files = glob.glob("/tmp/*.mp4")
+            output_files = [f for f in output_files if f != local_video_path]
+            if output_files:
+                output_video_path = max(output_files, key=os.path.getmtime)
             else:
-                output_result = pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                ).frames
+                return {"status": "error", "message": "لم يتم العثور على ملف الفيديو الناتج."}
 
-        torch.cuda.empty_cache()
+        if not os.path.exists(output_video_path) or os.path.getsize(output_video_path) == 0:
+            return {"status": "error", "message": "ملف الفيديو الناتج فارغ أو غير موجود."}
 
-        if output_result is None:
-            return {"status": "error", "message": "لم يُرجع النموذج أية إطارات."}
-
-        output = output_result[0] if isinstance(output_result, (list, tuple)) else output_result
-        video_frames = process_video_frames(output)
-
-        if not video_frames:
-            return {"status": "error", "message": "فشل معالجة الإطارات."}
-
-        video_path = "/tmp/output_wan22.mp4"
-        export_video_with_ffmpeg(video_frames, video_path, fps=fps)
-
-        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            return {"status": "error", "message": "ملف الفيديو فارغ."}
-
-        with open(video_path, "rb") as f:
+        print("📦 جاري قراءة وتحويل الفيديو الناتج إلى Base64...")
+        with open(output_video_path, "rb") as f:
             video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        print("✨ تمت عملية التوليد بنجاح تام!")
-        return {"status": "success", "video_base64": video_base64}
+        # تنظيف ذاكرة الـ GPU
+        torch.cuda.empty_cache()
+
+        print("✨ تمت عملية تحريك الشخصية ونقل الحركة بنجاح تام!")
+        return {
+            "status": "success", 
+            "video_base64": video_base64
+        }
 
     except Exception as e:
         traceback.print_exc()
