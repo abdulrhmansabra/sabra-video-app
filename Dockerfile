@@ -34,3 +34,4 @@ COPY handler.py /app/handler.py
 # Do not bake several GB of checkpoints into the image. They download to the container
 # at first request; use a persistent volume or pre-populate pretrained_weights for faster cold starts.
 CMD ["python3.10", "-u", "/app/handler.py"]
+
