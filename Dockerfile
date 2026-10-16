@@ -3,6 +3,7 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
+
 # تثبيت الحزم الأساسية ومكتبات النظام
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget ca-certificates \
@@ -10,8 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # تثبيت PyTorch المستقر مع دعم CUDA 12.4
-RUN python3 -m pip install --no-cache-dir --upgrade pip
-
+RUN python3 -m pip install --no-cache-dir --upgrade "pip==24.0"
 # تثبيت أحدث نسخة من diffusers حصرياً من الـ main branch بدون كاش
 RUN python3 -m pip install --no-cache-dir \
     torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 \
