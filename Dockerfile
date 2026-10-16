@@ -61,6 +61,7 @@ RUN python3 -m pip install \
     "onnxruntime-gpu==1.16.3" \
     "open-clip-torch==2.20.0" \
     "controlnet-aux==0.0.7" \
+    "matplotlib==3.8.4" \
     "protobuf==3.20.3" \
     "opentelemetry-proto==1.20.0" \
     "opentelemetry-exporter-otlp-proto-http==1.20.0" \
@@ -74,6 +75,7 @@ RUN python3 -m pip install \
 # ==================================================
 # 5. التحقق من PyTorch وPyAV
 # ==================================================
+RUN python3 -c "import matplotlib; print('Matplotlib OK:', matplotlib.__version__)"
 RUN python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA build:', torch.version.cuda)" \
     && python3 -c "import av; print('PyAV:', av.__version__)"
 
