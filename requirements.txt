@@ -1,0 +1,5 @@
+# Additional RunPod handler dependencies.
+# The Dockerfile separately installs Moore-AnimateAnyone's pinned requirements.txt
+# and installs PyTorch/torchvision/torchaudio from the CUDA 11.7 wheel index.
+runpod>=1.7.0,<2.0.0
+requests>=2.31.0,<3.0.0
