@@ -1,24 +1,44 @@
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-
-# تثبيت الحزم الأساسية ومكتبات النظام
+# ==================================================
+# 1. تثبيت متطلبات النظام
+# ==================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip python3-dev git wget ca-certificates \
-    libgl1-mesa-glx libglib2.0-0 ffmpeg \
+    python3 \
+    python3-pip \
+    python3-dev \
+    git \
+    wget \
+    ca-certificates \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# تثبيت PyTorch المستقر مع دعم CUDA 12.4
-RUN python3 -m pip install --no-cache-dir --upgrade "pip==24.0"
-# تثبيت أحدث نسخة من diffusers حصرياً من الـ main branch بدون كاش
-RUN python3 -m pip install --no-cache-dir \
-    torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 \
+# ==================================================
+# 2. تثبيت إصدار pip المتوافق مع المكتبات القديمة
+# ==================================================
+RUN python3 -m pip install --upgrade "pip==24.0"
+
+# ==================================================
+# 3. تثبيت PyTorch المتوافق مع CUDA 12.4
+# ==================================================
+RUN python3 -m pip install \
+    torch==2.4.1 \
+    torchvision==0.19.1 \
+    torchaudio==2.4.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت إصدار diffusers المتوافق مع المشروع
-RUN python3 -m pip install --no-cache-dir \
+# ==================================================
+# 4. تثبيت مكتبات Moore-AnimateAnyone
+# ==================================================
+RUN python3 -m pip install \
     "av==12.0.0" \
     "diffusers==0.24.0" \
     "transformers==4.30.2" \
@@ -42,13 +62,61 @@ RUN python3 -m pip install --no-cache-dir \
     "open-clip-torch==2.20.0" \
     "controlnet-aux==0.0.7" \
     "protobuf==3.20.3" \
-"opentelemetry-proto==1.20.0" \
-"opentelemetry-exporter-otlp-proto-http==1.20.0" \
-ftfy regex sentencepiece safetensors \
-runpod requests
-    
-ENV PYTHONUNBUFFERED=1
+    "opentelemetry-proto==1.20.0" \
+    "opentelemetry-exporter-otlp-proto-http==1.20.0" \
+    ftfy \
+    regex \
+    sentencepiece \
+    safetensors \
+    runpod \
+    requests
+
+# ==================================================
+# 5. التحقق من PyTorch وPyAV
+# ==================================================
+RUN python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA build:', torch.version.cuda)" \
+    && python3 -c "import av; print('PyAV:', av.__version__)"
+
+# ==================================================
+# 6. تنزيل المستودع الرسمي أثناء بناء الصورة
+# ==================================================
+RUN git clone --depth 1 \
+    https://github.com/MooreThreads/Moore-AnimateAnyone.git \
+    /app/Moore-AnimateAnyone
+
+# ==================================================
+# 7. ضبط مسارات المشروع
+# ==================================================
+ENV ANIMATEANYONE_ROOT=/app/Moore-AnimateAnyone
+ENV PYTHONPATH=/app/Moore-AnimateAnyone
+
+WORKDIR /app/Moore-AnimateAnyone
+
+# ==================================================
+# 8. التحقق من ملفات المشروع الأساسية
+# ==================================================
+RUN test -f /app/Moore-AnimateAnyone/tools/download_weights.py \
+    && test -f /app/Moore-AnimateAnyone/configs/prompts/animation.yaml \
+    && test -f /app/Moore-AnimateAnyone/src/utils/util.py
+
+# ==================================================
+# 9. تنزيل أوزان النموذج أثناء بناء الصورة
+# ==================================================
+RUN python3 /app/Moore-AnimateAnyone/tools/download_weights.py
+
+# ==================================================
+# 10. التحقق من وجود الأوزان المطلوبة
+# ==================================================
+RUN test -d /app/Moore-AnimateAnyone/pretrained_weights
+
+# ==================================================
+# 11. نسخ معالج RunPod بعد تنزيل الأوزان
+# ==================================================
+WORKDIR /app
 
 COPY handler.py /app/handler.py
 
+# ==================================================
+# 12. تشغيل RunPod Serverless Handler
+# ==================================================
 CMD ["python3", "-u", "/app/handler.py"]
