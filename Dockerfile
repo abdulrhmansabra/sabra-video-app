@@ -13,7 +13,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-dev python3-pip git git-lfs ffmpeg wget ca-certificates \
-    build-essential libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    build-essential pkg-config \
+    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+    libswscale-dev libswresample-dev libavfilter-dev \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3.10 -m pip install --upgrade pip wheel "setuptools==69.5.1"
