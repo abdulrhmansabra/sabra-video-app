@@ -40,8 +40,11 @@ RUN python3 -m pip install --no-cache-dir \
     "onnxruntime-gpu==1.16.3" \
     "open-clip-torch==2.20.0" \
     "controlnet-aux==0.0.7" \
-    ftfy regex sentencepiece protobuf safetensors \
-    runpod requests
+    "protobuf==3.20.3" \
+"opentelemetry-proto==1.20.0" \
+"opentelemetry-exporter-otlp-proto-http==1.20.0" \
+ftfy regex sentencepiece safetensors \
+runpod requests
     
 ENV PYTHONUNBUFFERED=1
 
