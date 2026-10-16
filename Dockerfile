@@ -102,7 +102,13 @@ RUN test -f /app/Moore-AnimateAnyone/tools/download_weights.py \
 # ==================================================
 # 9. تنزيل أوزان النموذج أثناء بناء الصورة
 # ==================================================
-RUN python3 /app/Moore-AnimateAnyone/tools/download_weights.py
+
+# إصلاح اسم مستودع image_encoder في سكربت التنزيل الرسمي
+RUN sed -i \
+    's|lambdalabs/sd-image-variations-diffusers|lambda/sd-image-variations-diffusers|g' \
+    /app/Moore-AnimateAnyone/tools/download_weights.py \
+    && python3 /app/Moore-AnimateAnyone/tools/download_weights.py
+
 
 # ==================================================
 # 10. التحقق من وجود الأوزان المطلوبة
