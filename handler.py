@@ -1,182 +1,232 @@
+"""RunPod Serverless handler for Moore-AnimateAnyone full-body pose transfer.
+
+Input: reference_image (URL or base64 data URI), and either driving_video
+(raw video, DWPose is run automatically) or pose_video (already pose-rendered).
+"""
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-import torch
-import numpy as np
-from PIL import Image
-import requests
-from io import BytesIO
 import base64
-import traceback
-import threading
+import gc
 import subprocess
-import cv2
-import sys
-import glob
+import threading
+import traceback
+from pathlib import Path
+from io import BytesIO
 
+import requests
+import torch
+from PIL import Image
 import runpod
 
-# إضافة مسار مستودع AnimateAnyone لبيئة العمل
-sys.path.append('/app/Moore-AnimateAnyone')
+ROOT = Path(os.getenv("ANIMATEANYONE_ROOT", "/app/Moore-AnimateAnyone"))
+WEIGHTS = ROOT / "pretrained_weights"
+CONFIG = ROOT / "configs/prompts/animation.yaml"
+PIPELINE_LOCK = threading.Lock()
+_controller = None
 
-print("🚀 جاري إعداد بيئة عمل Moore-AnimateAnyone على RunPod...")
 
-HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
-
-def _token_kwargs():
-    return {"token": HF_TOKEN} if HF_TOKEN else {}
-
-pipeline_lock = threading.Lock()
-
-def to_numpy(x):
-    if hasattr(x, "detach"): x = x.detach()
-    if hasattr(x, "cpu"): x = x.cpu()
-    if hasattr(x, "numpy"): x = x.numpy()
-    return x
-
-def enhance_and_normalize_frame(frame):
-    frame = to_numpy(frame)
-    frame = np.squeeze(np.asarray(frame))
-    if frame.ndim == 2: frame = frame[..., None]
-    while frame.ndim > 3: frame = frame[0]
-    if frame.ndim == 2: frame = frame[..., None]
-    if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
-        frame = np.transpose(frame, (1, 2, 0))
-    
-    if np.issubdtype(frame.dtype, np.floating) or frame.max() <= 1.0:
-        frame = (frame * 255.0).clip(0, 255).astype(np.uint8)
-    else:
-        frame = frame.clip(0, 255).astype(np.uint8)
-    
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    denoised_bgr = cv2.fastNlMeansDenoisingColored(
-        frame_bgr, None, h=3, hColor=3, templateWindowSize=7, searchWindowSize=21
-    )
-    return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
-
-def process_video_frames(video_frames):
-    if isinstance(video_frames, list):
-        return [enhance_and_normalize_frame(fr) for fr in video_frames]
-    raw_frames = to_numpy(video_frames)
-    if not isinstance(raw_frames, np.ndarray):
-        raw_frames = np.asarray(raw_frames)
-    if raw_frames.ndim == 5: raw_frames = raw_frames[0]
-    elif raw_frames.ndim == 4 and raw_frames.shape[0] == 1: raw_frames = raw_frames[0]
-    
-    out = []
-    for i in range(raw_frames.shape[0]):
-        try:
-            out.append(enhance_and_normalize_frame(raw_frames[i]))
-        except Exception as e:
-            print(f"⚠️ تحذير في إطار {i}: {e}")
-    return out
-
-def export_video_with_ffmpeg(frames, output_path, fps=24):
-    if not frames: raise ValueError("الإطارات فارغة.")
-    height, width, _ = frames[0].shape
-    cmd = [
-        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-        '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
-        '-i', '-', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '23', output_path
-    ]
-    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    for frame in frames:
-        if frame.dtype != np.uint8: frame = frame.astype(np.uint8)
-        process.stdin.write(frame.tobytes())
-    process.stdin.close()
-    process.wait()
-    if process.returncode != 0:
-        err = process.stderr.read().decode()
-        raise RuntimeError(f"فشل تصدير FFmpeg: {err}")
-
-def load_file_from_input(input_data: str, output_path: str):
-    """دالة عامة لتحميل الصور أو الفيديوهات من رابط أو Base64 وحفظها محلياً"""
-    if not input_data: return False
-    try:
-        input_str = str(input_data).strip()
-        if input_str.startswith("http://") or input_str.startswith("https://"):
-            response = requests.get(input_str, timeout=60)
+def _download_input(value, dest: Path, timeout=120):
+    """Write a URL/base64 string to a file. Also accepts raw base64 or data URI."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Missing or invalid input for {dest.name}")
+    value = value.strip()
+    if value.startswith(("http://", "https://")):
+        with requests.get(value, stream=True, timeout=timeout) as response:
             response.raise_for_status()
-            with open(output_path, "wb") as f:
-                f.write(response.content)
-            return True
-        else:
-            if "," in input_str: input_str = input_str.split(",", 1)[1]
-            data = base64.b64decode(input_str)
-            with open(output_path, "wb") as f:
-                f.write(data)
-            return True
-    except Exception as e:
-        print(f"خطأ في قراءة وتحميل الملف إلى {output_path}: {e}")
-        return False
+            with open(dest, "wb") as out:
+                for chunk in response.iter_content(1024 * 1024):
+                    if chunk:
+                        out.write(chunk)
+    else:
+        encoded = value.split(",", 1)[1] if value.startswith("data:") and "," in value else value
+        try:
+            dest.write_bytes(base64.b64decode(encoded, validate=True))
+        except Exception as exc:
+            raise ValueError(f"{dest.name} must be a URL or base64/data URI") from exc
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise ValueError(f"Downloaded input is empty: {dest.name}")
+    return dest
+
+
+def _ensure_weights():
+    required = [
+        WEIGHTS / "denoising_unet.pth",
+        WEIGHTS / "reference_unet.pth",
+        WEIGHTS / "pose_guider.pth",
+        WEIGHTS / "motion_module.pth",
+        WEIGHTS / "DWPose/dw-ll_ucoco_384.onnx",
+        WEIGHTS / "DWPose/yolox_l.onnx",
+        WEIGHTS / "image_encoder/config.json",
+        WEIGHTS / "sd-vae-ft-mse/config.json",
+        WEIGHTS / "stable-diffusion-v1-5/unet/config.json",
+    ]
+    missing = [str(p) for p in required if not p.exists()]
+    if not missing:
+        return
+    if os.getenv("AUTO_DOWNLOAD_WEIGHTS", "1").lower() not in ("1", "true", "yes"):
+        raise RuntimeError("AnimateAnyone weights are missing. Missing: " + ", ".join(missing))
+    downloader = ROOT / "tools/download_weights.py"
+    if not downloader.exists():
+        raise RuntimeError(f"AnimateAnyone repository not found at {ROOT}; check Dockerfile build.")
+    print("📦 Downloading missing AnimateAnyone model weights (first invocation may take time)...")
+    result = subprocess.run(["python", str(downloader)], cwd=ROOT, text=True, capture_output=True)
+    if result.returncode:
+        raise RuntimeError("Weight download failed. Check Hugging Face access/network.\n" + result.stdout[-4000:] + "\n" + result.stderr[-4000:])
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise RuntimeError("Weight download completed but files remain missing: " + ", ".join(missing))
+
+
+def _get_controller():
+    global _controller
+    if _controller is not None:
+        return _controller
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA GPU is required. Attach this RunPod endpoint to a CUDA GPU worker.")
+    if not CONFIG.exists():
+        raise RuntimeError(f"AnimateAnyone config not found: {CONFIG}")
+    # Upstream config uses paths relative to the repository root.
+    os.chdir(ROOT)
+    _ensure_weights()
+
+    # Import model modules from the upstream repository, without importing app.py
+    # (which launches a Gradio server as a side effect).
+    import sys
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from omegaconf import OmegaConf
+    from diffusers import AutoencoderKL, DDIMScheduler
+    from transformers import CLIPVisionModelWithProjection
+    from src.models.unet_2d_condition import UNet2DConditionModel
+    from src.models.unet_3d import UNet3DConditionModel
+    from src.models.pose_guider import PoseGuider
+    from src.pipelines.pipeline_pose2vid import Pose2VideoPipeline
+
+    config = OmegaConf.load(str(CONFIG))
+    dtype = torch.float16
+    vae = AutoencoderKL.from_pretrained(config.pretrained_vae_path).to("cuda", dtype=dtype)
+    reference_unet = UNet2DConditionModel.from_pretrained(
+        config.pretrained_base_model_path, subfolder="unet"
+    ).to(device="cuda", dtype=dtype)
+    inference_cfg = OmegaConf.load(config.inference_config)
+    denoising_unet = UNet3DConditionModel.from_pretrained_2d(
+        config.pretrained_base_model_path,
+        config.motion_module_path,
+        subfolder="unet",
+        unet_additional_kwargs=inference_cfg.unet_additional_kwargs,
+    ).to(device="cuda", dtype=dtype)
+    pose_guider = PoseGuider(320, block_out_channels=(16, 32, 96, 256)).to(device="cuda", dtype=dtype)
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained(config.image_encoder_path).to("cuda", dtype=dtype)
+
+    denoising_unet.load_state_dict(torch.load(config.denoising_unet_path, map_location="cpu"), strict=False)
+    reference_unet.load_state_dict(torch.load(config.reference_unet_path, map_location="cpu"))
+    pose_guider.load_state_dict(torch.load(config.pose_guider_path, map_location="cpu"))
+    scheduler = DDIMScheduler(**OmegaConf.to_container(inference_cfg.noise_scheduler_kwargs))
+    pipe = Pose2VideoPipeline(
+        vae=vae,
+        image_encoder=image_encoder,
+        reference_unet=reference_unet,
+        denoising_unet=denoising_unet,
+        pose_guider=pose_guider,
+        scheduler=scheduler,
+    ).to("cuda", dtype=dtype)
+    _controller = pipe
+    print("✅ AnimateAnyone pipeline loaded")
+    return _controller
+
+
+def _encode_file(path: Path):
+    return base64.b64encode(path.read_bytes()).decode("ascii")
+
 
 def handler(event):
     try:
-        job_input = event.get("input") or {}
-        
-        # مدخلات AnimateAnyone (صورة الشخصية + فيديو الحركة المرجعي)
-        character_image_input = job_input.get("character_image") or job_input.get("image")
-        pose_video_input = job_input.get("pose_video") or job_input.get("video")
+        data = (event or {}).get("input") or {}
+        image_value = data.get("reference_image") or data.get("image_reference") or data.get("image")
+        driving_value = data.get("driving_video") or data.get("video_reference")
+        pose_value = data.get("pose_video")
+        if not image_value:
+            return {"status": "error", "message": "أرسل reference_image: صورة الشخصية المستهدفة (URL أو base64)."}
+        if not driving_value and not pose_value:
+            return {"status": "error", "message": "أرسل driving_video (فيديو الحركة الأصلي) أو pose_video (فيديو الوضعيات الجاهز)."}
 
-        if not character_image_input or not pose_video_input:
-            return {
-                "status": "error", 
-                "message": "يلزم إرسال صورة الشخصية (character_image) وفيديو الحركة المرجعي (pose_video)."
-            }
+        width = int(data.get("width", 512))
+        height = int(data.get("height", 768))
+        length = int(data.get("num_frames", data.get("length", 24)))
+        steps = int(data.get("num_inference_steps", 25))
+        guidance = float(data.get("guidance_scale", 3.5))
+        fps_override = int(data.get("fps", 0))
+        seed = int(data.get("seed", 123))
+        if width < 64 or height < 64 or length < 1 or length > 128:
+            raise ValueError("width/height must be >=64 and num_frames must be between 1 and 128")
 
-        local_image_path = "/tmp/character_image.png"
-        local_video_path = "/tmp/pose_video.mp4"
-        output_video_path = "/tmp/output_animation.mp4"
+        work = Path("/tmp") / f"animateanyone_{os.getpid()}"
+        work.mkdir(parents=True, exist_ok=True)
+        image_path = _download_input(image_value, work / "reference_image.bin")
+        with Image.open(image_path) as im:
+            reference_image = im.convert("RGB")
+        video_path = _download_input(pose_value or driving_value, work / "input_video.mp4")
 
-        print("📥 جاري تجهيز وتحميل المدخلات...")
-        if not load_file_from_input(character_image_input, local_image_path):
-            return {"status": "error", "message": "فشل تحميل صورة الشخصية."}
-        
-        if not load_file_from_input(pose_video_input, local_video_path):
-            return {"status": "error", "message": "فشل تحميل الفيديو المرجعي."}
-
-        print("🎬 جاري تشغيل نموذج AnimateAnyone لنقل الحركة...")
-
-        with pipeline_lock:
-            # استدعاء سكريبت الاستدلال الخاص بالمستودع عبر الـ Subprocess ضمن قفل الحماية
-            inference_cmd = [
-                sys.executable, "/app/Moore-AnimateAnyone/inference.py",
-                "--source_image", local_image_path,
-                "--driving_video", local_video_path,
-                "--output_dir", "/tmp"
-            ]
-            
-            result = subprocess.run(inference_cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"❌ خطأ أثناء تنفيذ النمذجة: {result.stderr}")
-                return {"status": "error", "message": f"فشل عملية المعالجة: {result.stderr[-500:]}"}
-
-        torch.cuda.empty_cache()
-
-        # البحث عن الفيديو الناتج والتحقق منه
-        if not os.path.exists(output_video_path):
-            output_files = glob.glob("/tmp/*.mp4")
-            output_files = [f for f in output_files if f != local_video_path]
-            if output_files:
-                output_video_path = max(output_files, key=os.path.getmtime)
+        with PIPELINE_LOCK:
+            import sys
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            from src.utils.util import get_fps, save_videos_grid
+            if driving_value and not pose_value:
+                # DWPose produces <input-stem>_kps.mp4 next to the input.
+                pose_path = work / "input_video_kps.mp4"
+                proc = subprocess.run(
+                    ["python", str(ROOT / "tools/vid2pose.py"), "--video_path", str(video_path)],
+                    cwd=ROOT, text=True, capture_output=True,
+                )
+                if proc.returncode != 0 or not pose_path.exists():
+                    raise RuntimeError("DWPose extraction failed.\n" + proc.stdout[-3000:] + "\n" + proc.stderr[-3000:])
             else:
-                return {"status": "error", "message": "لم يُرجع النموذج أي ملف فيديو."}
+                pose_path = video_path
 
-        if not os.path.exists(output_video_path) or os.path.getsize(output_video_path) == 0:
-            return {"status": "error", "message": "ملف الفيديو الناتج فارغ أو غير موجود."}
+            pipe = _get_controller()
+            src_fps = fps_override if fps_override > 0 else int(get_fps(str(video_path)))
+            from src.utils.util import read_frames
+            pose_frames = read_frames(str(pose_path))
+            if not pose_frames:
+                raise RuntimeError("No frames could be read from the pose video.")
+            length = min(length, len(pose_frames))
+            generator = torch.Generator(device="cuda").manual_seed(seed)
+            result = pipe(
+                reference_image,
+                pose_frames[:length],
+                width=width,
+                height=height,
+                video_length=length,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                generator=generator,
+            ).videos
+            output_path = work / "output_animateanyone.mp4"
+            save_videos_grid(result, str(output_path), n_rows=1, fps=src_fps)
 
-        # قراءة الفيديو الناتج وتحويله إلى Base64 للإرجاع بنفس الهيكل السابق
-        with open(output_video_path, "rb") as f:
-            video_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-        print("✨ تمت عملية التوليد ونقل الحركة بنجاح تام!")
-        return {"status": "success", "video_base64": video_base64}
-
-    except Exception as e:
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError("AnimateAnyone did not produce a valid MP4 file.")
+        response = {
+            "status": "success",
+            "video_base64": _encode_file(output_path),
+            "content_type": "video/mp4",
+            "num_frames": length,
+            "fps": src_fps,
+            "width": width,
+            "height": height,
+        }
+        return response
+    except Exception as exc:
         traceback.print_exc()
-        torch.cuda.empty_cache()
-        return {"status": "error", "message": str(e)}
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return {"status": "error", "message": str(exc)}
+    finally:
+        gc.collect()
+
 
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})
