@@ -1,38 +1,30 @@
-# Moore-AnimateAnyone has a pinned legacy dependency stack targeting CUDA 11.7.
-# Build this image on a RunPod GPU worker; model weights are downloaded lazily on first job.
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    ANIMATEANYONE_ROOT=/app/Moore-AnimateAnyone \
-    AUTO_DOWNLOAD_WEIGHTS=1 \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
+ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
+
+# تثبيت الحزم الأساسية ومكتبات النظام
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-dev python3-pip git git-lfs ffmpeg wget ca-certificates \
-    build-essential libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    python3-pip python3-dev git wget ca-certificates \
+    libgl1-mesa-glx libglib2.0-0 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/MooreThreads/Moore-AnimateAnyone.git /app/Moore-AnimateAnyone
-WORKDIR /app/Moore-AnimateAnyone
+# تثبيت PyTorch المستقر مع دعم CUDA 12.4
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir torch torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu124
 
-# Upstream pins the versions used by its inference implementation.
-# Keep pkg_resources available: newer setuptools releases removed it, while the
-# upstream CLIP setup script imports it during wheel metadata generation.
-RUN python3.10 -m pip install --upgrade pip wheel "setuptools==69.5.1" && \
-    python3.10 -m pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
-      --index-url https://download.pytorch.org/whl/cu117 && \
-    python3.10 -m pip install --no-build-isolation -r requirements.txt
+# استنساخ مستودع Moore-AnimateAnyone فقط
+RUN git clone https://github.com/MooreThreads/Moore-AnimateAnyone.git /app/Moore-AnimateAnyone
 
-# Handler dependencies are installed directly here; no separate requirements.txt needed.
-RUN python3.10 -m pip install "runpod>=1.7.0,<2.0.0" "requests>=2.31.0,<3.0.0"
+# تثبيت المكتبات الأساسية مباشرة دفعة واحدة بدون الحاجة لملف requirements.txt
+RUN pip3 install --no-cache-dir \
+    runpod accelerate transformers safetensors huggingface_hub \
+    numpy pillow opencv-python-headless requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex \
+    diffusers
 
-WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
 COPY handler.py /app/handler.py
 
-# Do not bake several GB of checkpoints into the image. They download to the container
-# at first request; use a persistent volume or pre-populate pretrained_weights for faster cold starts.
-CMD ["python3.10", "-u", "/app/handler.py"]
+CMD ["python3", "-u", "/app/handler.py"]
