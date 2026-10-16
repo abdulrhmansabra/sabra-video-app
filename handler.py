@@ -5,7 +5,8 @@ Inputs:
   driving_video: raw motion video URL/base64 (DWPose is run automatically)
   pose_video: already pose-rendered video URL/base64 (alternative to driving_video)
 
-The official repository and weights are prepared lazily on the first valid job.
+The official repository and weights are downloaded into temporary storage (/tmp) lazily on the first valid job.
+Temporary files may be removed when the RunPod worker is recycled.
 """
 import os
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -25,7 +26,7 @@ from PIL import Image
 import runpod
 
 REPO_URL = "https://github.com/MooreThreads/Moore-AnimateAnyone.git"
-ROOT = Path(os.getenv("ANIMATEANYONE_ROOT", "/app/Moore-AnimateAnyone")).resolve()
+ROOT = Path(os.getenv("ANIMATEANYONE_ROOT", "/tmp/Moore-AnimateAnyone")).resolve()
 WEIGHTS = ROOT / "pretrained_weights"
 CONFIG = ROOT / "configs/prompts/animation.yaml"
 PIPELINE_LOCK = threading.Lock()
