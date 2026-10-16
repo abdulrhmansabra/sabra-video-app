@@ -3,7 +3,7 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# تثبيت الحزم الأساسية ومكتبات النظام
+# تثبيت الحزم الأساسية ومكتبات النظام المطلوبة للمعالجة و FFmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget ca-certificates \
     libgl1-mesa-glx libglib2.0-0 ffmpeg \
@@ -14,17 +14,17 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
-# تثبيت أحدث نسخة من diffusers حصرياً من الـ main branch بدون كاش
-RUN pip3 install --no-cache-dir --force-reinstall \
-    git+https://github.com/huggingface/diffusers.git
+# استنساخ مستودع Moore-AnimateAnyone الرسمي
+RUN git clone https://github.com/MooreThreads/Moore-AnimateAnyone.git /app/Moore-AnimateAnyone
 
-# تثبيت باقي الحزم المطلوبة
-RUN pip3 install --no-cache-dir \
-    runpod accelerate transformers safetensors huggingface_hub \
-    numpy pillow opencv-python-headless requests sentencepiece protobuf imageio imageio-ffmpeg ftfy regex
+# الانتقال للمستودع وتثبيت المتطلبات الخاصة به
+WORKDIR /app/Moore-AnimateAnyone
+RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir runpod accelerate transformers safetensors huggingface_hub opencv-python-headless requests
 
-ENV PYTHONUNBUFFERED=1
-
+# العودة لمجلد العمل الرئيسي ونسخ الـ handler
+WORKDIR /app
 COPY handler.py /app/handler.py
 
+ENV PYTHONUNBUFFERED=1
 CMD ["python3", "-u", "/app/handler.py"]
