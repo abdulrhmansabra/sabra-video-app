@@ -37,8 +37,11 @@ RUN python3.10 -m pip install \
     "torchdiffeq==0.2.3" "torchmetrics==1.2.1" "torchsde==0.2.5" \
     "tqdm==4.66.1" "open-clip-torch==2.20.0" "controlnet-aux==0.0.7" \
     "ftfy" "regex" "sentencepiece" "protobuf" "safetensors" \
-    "runpod>=1.7.0,<2.0.0" "requests>=2.31.0,<3.0.0" \
-    "clip @ https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+    "runpod>=1.7.0,<2.0.0" "requests>=2.31.0,<3.0.0"
+
+# Install OpenAI CLIP separately using the upstream-supported Git URL.
+RUN python3.10 -m pip install \
+    "git+https://github.com/openai/CLIP.git"
 
 # Download weights during image build so the first serverless request does not download them.
 # This step takes time and makes the container image large.
