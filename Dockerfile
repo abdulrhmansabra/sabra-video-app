@@ -19,6 +19,7 @@ RUN python3 -m pip install --no-cache-dir \
 
 # تثبيت إصدار diffusers المتوافق مع المشروع
 RUN python3 -m pip install --no-cache-dir \
+    "av==12.0.0" \
     "diffusers==0.24.0" \
     "transformers==4.30.2" \
     "accelerate==0.21.0" \
