@@ -31,7 +31,7 @@ import runpod
 # Official repository and temporary storage
 REPO_URL = "https://github.com/MooreThreads/Moore-AnimateAnyone.git"
 ROOT = Path(
-    os.getenv("ANIMATEANYONE_ROOT", "/tmp/Moore-AnimateAnyone")
+    os.getenv("ANIMATEANYONE_ROOT", "/app/Moore-AnimateAnyone")
 ).resolve()
 
 WEIGHTS = ROOT / "pretrained_weights"
